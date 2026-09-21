@@ -1,0 +1,26 @@
+{
+  "name": "caisson",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.5.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "@types/node": "^26.6.2",
+    "turbo": "^2.11.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}

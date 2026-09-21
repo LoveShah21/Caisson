@@ -1,1 +1,9 @@
-AGENTS.md
+node_modules/
+.pnpm-store/
+.turbo/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
