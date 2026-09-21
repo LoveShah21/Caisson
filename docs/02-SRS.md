@@ -21,7 +21,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 ### 3.1 Session lifecycle
 
 - **FR-1** The system must expose `POST /v1/sessions` accepting an agent image reference, a scope set, an approval mode, a TTL, an idle timeout, and free-form metadata.
-- **FR-2** A session must progress through `pending -> booting -> ready -> active -> suspended -> terminating -> terminated`. Illegal transitions must be rejected and logged.
+- **FR-2** A session must follow the normal lifecycle `pending -> booting -> ready -> active -> suspended -> terminating -> terminated`. `terminated` and `failed` are terminal states. `terminated` records a clean end, including explicit `DELETE`, TTL expiry, or idle-timeout termination. `failed` records an unrecoverable driver boot failure, snapshot restore failure, fault-injection failure with no recovery path, or invariant-violation abort. Entry into `failed` is permitted from `pending`, `booting`, `ready`, `active`, or `suspended`, but not from `terminating`. An error during `terminating` must still resolve to `terminated`, with `termination_reason` recording the problem. Neither terminal state may transition again. All other illegal transitions must be rejected and logged.
 - **FR-3** The control plane must mint one session token at session creation. Only its argon2id hash may be persisted in `session_tokens.token_hash`; the plaintext token must never be returned to the API caller or made readable inside the sandbox. The guest never presents a token, and the guest-to-broker protocol must contain no token field. On every call, the broker must resolve the host-established `transport_bindings` record for the vsock connection, load its token row, and check `expires_at` and `revoked_at`. The binding is fixed by the host at boot and cannot be influenced by guest content. V1 does not rotate a token mid-session. Termination or manual revocation must set `revoked_at`, and token lifetime must not exceed session TTL.
 - **FR-4** A session must terminate automatically at TTL expiry and must suspend after the idle timeout with no broker call and no exec.
 - **FR-5** The system must expose `GET /v1/sessions/:id` returning state, timing, scope set, action counts by decision, and pending approval count.
@@ -47,7 +47,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 ### 3.4 Broker
 
 - **FR-18** The broker must run on the host, outside the sandbox trust boundary. See ADR-2.
-- **FR-19** The broker must accept exactly one request shape: `{ service, method, params, idempotencyKey }`.
+- **FR-19** The broker must accept exactly one request shape: `{ service, method, params, idempotencyKey, intent }`, where `intent` is a required, non-empty, agent-authored description of why the call is being made. The schema must not impose a length cap. A missing or empty `intent` must fail with `PARAMS_INVALID` before policy evaluation. Audit storage may truncate `agent_intent` according to its storage limit.
 - **FR-20** The broker must resolve session identity from the transport binding, never from request content.
 - **FR-21** The broker must validate `params` against the adapter method's schema and must reject unknown fields.
 - **FR-22** The broker must evaluate policy before any credential is fetched.

@@ -46,6 +46,8 @@ CREATE INDEX ON sessions (requested_by, created_at DESC);
 
 `hardware_isolated` is denormalised onto the session deliberately. When someone asks in six months whether a given session ran with real isolation, the answer must be in the row, not inferred from configuration that has since changed.
 
+For both `terminated` and `failed`, `termination_reason` carries the specific cause. Queries must not infer the cause from `status` alone.
+
 ### 1.2 session_tokens
 
 ```sql
