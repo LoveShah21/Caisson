@@ -8,7 +8,7 @@
 
 **Approval mode.** Per-session setting: `auto` (policy decides, nothing escalates), `rule` (escalate when policy says so), `always` (every action blocks on a human).
 
-**Broker.** The host-side process that is the agent's only route to the outside world. Resolves identity, validates parameters, evaluates policy, holds credentials, executes, redacts, audits.
+**Broker.** The host-side process that handles every named service action. Resolves identity, validates parameters, evaluates policy, holds credentials, executes, redacts, and audits. Explicitly allowlisted intercepted destinations are the only external route that does not use a broker call.
 
 **Caisson.** A pressurised chamber used for underwater construction. Work happens inside a sealed box and everything entering or leaving passes through a lock. Also the name of this system.
 
@@ -17,6 +17,8 @@
 **Credential brokering.** The pattern where the agent names an action and a trusted component holds the secret and performs it. The agent never possesses the credential.
 
 **Fail closed.** When a dependency is unavailable or a decision cannot be reached, refuse the action. The opposite, fail open, does not exist anywhere in this system and no flag enables it.
+
+**Fail durable.** After an external operation has executed, retain its terminal audit record in a durable completion buffer until the audit store accepts it. The system must not claim that the operation was refused after its side effect has already happened.
 
 **Guest.** Everything inside the sandbox. Untrusted by definition.
 

@@ -60,9 +60,10 @@ CREATE TABLE session_tokens (
   revocation_reason TEXT
 );
 CREATE UNIQUE INDEX ON session_tokens (token_hash);
+CREATE UNIQUE INDEX ON session_tokens (session_id);
 ```
 
-Scopes are snapshotted at mint time so that widening the session record later cannot retroactively widen an existing token. Narrowing is applied by intersecting token scopes with session scopes at evaluation time.
+V1 permits one token per session. Scopes are snapshotted at mint time so that widening the session record later cannot retroactively widen an existing token. Narrowing is applied by intersecting token scopes with session scopes at evaluation time.
 
 ### 1.3 transport_bindings
 
@@ -212,7 +213,8 @@ CREATE TABLE actions (
   action_id        UUID,
   timestamp        DateTime64(3),
   seq              UInt32,                          -- monotonic within session
-  action_type      LowCardinality(String),          -- broker_call|exec|read|write|edit|search|ask_user|approval|lifecycle
+  event_type       LowCardinality(String),          -- started|completed|failed|denied|require_approval|approval_resolved|observed|lifecycle
+  action_type      LowCardinality(String),          -- broker_call|exec|read|write|edit|search|ask_user|approval|lifecycle|policy_simulate|network_denied
   service          LowCardinality(String),
   method           LowCardinality(String),
   decision         LowCardinality(String),          -- allow|deny|require_approval|n/a
@@ -236,7 +238,9 @@ CREATE TABLE actions (
   trace_id         String,
   span_id          String,
   error_code       LowCardinality(String),
-  error_message    String
+  error_message    String,
+  network_destination String,
+  network_protocol LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (session_id, seq)
@@ -244,6 +248,8 @@ TTL toDateTime(timestamp) + INTERVAL 13 MONTH;
 ```
 
 Ordering by `(session_id, seq)` rather than timestamp makes the most common query, replaying one session in order, a single contiguous read. `seq` also makes gaps detectable, which matters for INV-4: a missing sequence number is evidence.
+
+Executable operations use the same `action_id` for their `started` and terminal rows. Denials have one terminal row because nothing executes. Approval creation and resolution have separate rows linked by `approval_id`. A `network_denied` row is host-observed and stores only `network_destination`, `network_protocol`, and `timestamp`; parameter and result fields remain empty. A `policy_simulate` row is retained for audit but excluded from the real session replay query.
 
 ### 2.2 Materialised views
 
@@ -263,13 +269,13 @@ FROM actions GROUP BY day, service, method, decision;
 
 Implement these as named functions in `packages/audit` with typed results:
 
-1. `replaySession(sessionId)` - ordered actions with previews, decisions, approvals, and loaded skills.
+1. `replaySession(sessionId)` - ordered actions with previews, decisions, approvals, and loaded skills, excluding records where `action_type = 'policy_simulate'`.
 2. `serviceActivity(service, from, to)` - what touched a service, by whom, with what outcome.
 3. `denials(from, to, filters?)` - every refusal, with policy reason and the session's stated purpose.
 
 ## 3. Redis
 
-Not a store of record. Holds BullMQ queues (`approvals`, `snapshot-rebuild`, `session-reaper`), the approval wait registry, and a short-lived idempotency key set. Everything in Redis is reconstructible.
+Not the final store of record. Holds BullMQ queues (`approvals`, `snapshot-rebuild`, `session-reaper`), the approval wait registry, and a short-lived idempotency key set. It may also hold the persistent completion stream used when a direct post-execution ClickHouse write fails. Queue and registry state is reconstructible. A completion-stream entry is retained durably until ClickHouse acknowledges the corresponding terminal audit row; Redis persistence must be enabled when this implementation is selected instead of the on-disk broker WAL.
 
 ## 4. Rules
 

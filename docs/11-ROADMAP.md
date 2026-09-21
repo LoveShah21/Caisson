@@ -10,7 +10,7 @@ pnpm workspace, Turborepo, strict TypeScript, `packages/protocol` with the error
 
 ## M-1. Isolation and lifecycle (weeks 1 to 2)
 
-FR-1 to FR-17. `IsolationDriver`, both implementations, session state machine, snapshot build and restore, base snapshot scheduler, session reaper, boot spans.
+FR-1 to FR-17 and FR-62. `IsolationDriver`, both implementations, session state machine, snapshot build and restore, base snapshot scheduler, session reaper, boot spans, network policy, and the host-side egress monitor.
 
 **Gate:**
 - A session boots, runs `exec(["echo","hello"])`, and destroys cleanly on both drivers.
@@ -20,7 +20,7 @@ FR-1 to FR-17. `IsolationDriver`, both implementations, session state machine, s
 
 ## M-2. Broker and credential brokering (weeks 3 to 4)
 
-FR-18 to FR-32. vsock transport, transport binding, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy.
+FR-18 to FR-28, FR-30 to FR-32, and the postgres, http, and s3 portion of FR-29. vsock transport, transport binding, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy. The github and slack portion of FR-29 is scheduled in M-4.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
@@ -40,7 +40,7 @@ FR-33 to FR-45. OPA wasm evaluator, bundle storage and activation with test gati
 
 ## M-4. Approvals and interception (weeks 6 to 7)
 
-FR-46 to FR-54, FR-59 to FR-61. Websocket hub, approval queue with timeout, signed decisions, approval UI, redaction pipeline, mitmproxy interceptor.
+FR-46 to FR-54, FR-59 to FR-61, and the github and slack portion of FR-29. Websocket hub, approval queue with timeout, signed decisions, approval UI, redaction pipeline, mitmproxy interceptor, github adapter, and slack adapter. Github supplies the `createPullRequest` approval journey. Slack supplies approver notifications and the notify obligation.
 
 **Gate:**
 - An `always` mode session blocks on every action and resumes on approve.
@@ -57,6 +57,7 @@ FR-55 to FR-58, all of `10-OBSERVABILITY.md`. ClickHouse schema and writers, the
 **Gate:**
 - INV-4 passes including the fault-injection case.
 - All eight invariant tests green in CI.
+- All five required adapters pass their contract and integration tests.
 - Adversarial suite at forty or more attempts across eight categories.
 - `docs/adversarial-log.md` documents every attempt that initially succeeded.
 - Sequence-gap alert fires in a test.

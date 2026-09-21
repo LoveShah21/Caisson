@@ -1,6 +1,6 @@
 # Caisson documentation index
 
-Caisson is an isolated execution environment for LLM agents. The agent runs sealed, holds no credentials, reaches nothing except a broker it cannot modify, and cannot take an action that is not logged.
+Caisson is an isolated execution environment for LLM agents. The agent runs sealed, holds no credentials, reaches nothing except a broker it cannot modify and destinations explicitly allowlisted for interception, and cannot take an action that is not logged.
 
 These documents are the specification of record. If code and documents disagree, stop and resolve the disagreement explicitly rather than letting the code win silently.
 

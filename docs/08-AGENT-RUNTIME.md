@@ -4,7 +4,7 @@
 
 The runtime is small on purpose. The security argument is not "the agent is well-behaved", it is "the agent has no mechanism to misbehave." Every capability added here weakens that argument, so additions need a recorded decision in `13-DECISIONS.md`.
 
-There is no HTTP client in the guest. There is no shell. There is no package installer. The network does not exist from inside except as a vsock.
+There is no HTTP client in the guest. There is no shell. There is no package installer. The guest has no general-purpose network route. It can use vsock for its seven tool operations and reach only destinations explicitly allowlisted for host-side interception.
 
 ## 2. Tools
 
@@ -15,7 +15,7 @@ There is no HTTP client in the guest. There is no shell. There is no package ins
 | `edit` | `(path, oldString, newString)` | Structured replace. Fails if `oldString` is absent or ambiguous. |
 | `search` | `(pattern, path?, opts?)` | ripgrep over the workspace. Result cap. |
 | `exec` | `(argv[], cwd?, timeoutMs?)` | Allowlisted binaries only. No shell. argv array, never a string. |
-| `broker` | `(service, method, params, intent)` | The only route out. |
+| `broker` | `(service, method, params, intent)` | The only route for named service actions. Explicitly allowlisted intercepted destinations are the separate exception. |
 | `ask_user` | `(question, options?)` | Routed to the approval websocket, same timeout semantics as approvals. |
 
 ### exec allowlist (v1)
@@ -27,6 +27,8 @@ Enforcement notes, all of which have tests in INV-8:
 - Strip and ignore `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `PYTHONSTARTUP` from the child environment.
 - `PATH` in the guest points only at the allowlist directory.
 - Never pass user content through `sh -c`. There is no code path that builds a command string.
+
+Every tool invocation crosses the vsock protocol. Local filesystem, process, search, and user-question operations execute outside the agent process and produce audit records under FR-55 and INV-4.
 
 ## 3. Agent loop
 

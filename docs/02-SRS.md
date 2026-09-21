@@ -22,7 +22,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 
 - **FR-1** The system must expose `POST /v1/sessions` accepting an agent image reference, a scope set, an approval mode, a TTL, an idle timeout, and free-form metadata.
 - **FR-2** A session must progress through `pending -> booting -> ready -> active -> suspended -> terminating -> terminated`. Illegal transitions must be rejected and logged.
-- **FR-3** The session token must never be returned to the API caller and must never be readable from inside the sandbox. The guest is authenticated by the binding of its transport connection to a session record.
+- **FR-3** The control plane must mint one session token at session creation. Only its argon2id hash may be persisted in `session_tokens.token_hash`; the plaintext token must never be returned to the API caller or made readable inside the sandbox. The guest never presents a token, and the guest-to-broker protocol must contain no token field. On every call, the broker must resolve the host-established `transport_bindings` record for the vsock connection, load its token row, and check `expires_at` and `revoked_at`. The binding is fixed by the host at boot and cannot be influenced by guest content. V1 does not rotate a token mid-session. Termination or manual revocation must set `revoked_at`, and token lifetime must not exceed session TTL.
 - **FR-4** A session must terminate automatically at TTL expiry and must suspend after the idle timeout with no broker call and no exec.
 - **FR-5** The system must expose `GET /v1/sessions/:id` returning state, timing, scope set, action counts by decision, and pending approval count.
 - **FR-6** `DELETE /v1/sessions/:id` must terminate a session within five seconds and must destroy sandbox memory and disk.
@@ -51,10 +51,10 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 - **FR-20** The broker must resolve session identity from the transport binding, never from request content.
 - **FR-21** The broker must validate `params` against the adapter method's schema and must reject unknown fields.
 - **FR-22** The broker must evaluate policy before any credential is fetched.
-- **FR-23** The broker must write an `action.started` audit record before execution and must abort the action if that write fails.
+- **FR-23** Before fetching a credential or executing an operation, the broker or control plane must synchronously persist a pre-execution audit record. An executable operation writes `action.started`. A policy denial writes one terminal deny record before returning to the guest. An approval request writes `require_approval` when it is created and writes a second resolution record when it is approved, denied, or timed out. If any required pre-execution write fails, the operation must abort before a credential is fetched or an operation is executed.
 - **FR-24** The broker must apply obligations returned by policy, including role downgrade and redaction.
 - **FR-25** The broker must enforce a per-call timeout and must pool connections per service and credential.
-- **FR-26** The broker must write an `action.completed` or `action.failed` record containing duration, result size, result hash, and redaction count.
+- **FR-26** After execution, the broker must durably accept an `action.completed` or `action.failed` record containing duration, result size, result hash, and redaction count before returning the result. A direct ClickHouse write is the fast path. If it fails, the record must be appended to a durable completion buffer, implemented as a persistent Redis stream or an on-disk broker WAL, and retried until ClickHouse accepts it. A post-execution audit failure must never be represented as though the external effect did not happen, and the completion record must never be dropped.
 - **FR-27** Idempotency keys must suppress duplicate side-effecting execution within a session for a configurable window.
 
 ### 3.5 Adapters
@@ -74,6 +74,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 - **FR-37** SQL restrictions must be evaluated against a parsed statement type, never by substring matching. See ADR-5.
 - **FR-38** Policy must support time windows, scope requirements, per-session rate limits, and escalation for side-effecting methods.
 - **FR-39** Every shipped policy must have Rego unit tests run in CI.
+- **FR-39a** The system must expose `POST /v1/policy/simulate`, accepting a complete policy input and returning the decision with matched rule names without executing the action. Every simulation must write an audit record tagged `action_type='policy_simulate'`. Simulation records must be excluded from the real per-session replay view.
 
 ### 3.7 Agent runtime
 
@@ -101,7 +102,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 
 ### 3.10 Audit
 
-- **FR-55** Every action must produce an audit record, including denials and approval events and lifecycle transitions.
+- **FR-55** Every guest operation must produce audit records: `read`, `write`, `edit`, `exec`, `search`, `broker`, and `ask_user`. Denials, approval events, lifecycle transitions, policy simulations, and host-observed blocked egress attempts must also be audited.
 - **FR-56** Audit records must store a hash of full parameters and a redacted truncated preview, not raw parameters.
 - **FR-57** The system must provide queries for: all actions in a session; all actions against a service in a time range; all denials in a time range.
 - **FR-58** Audit records must carry trace and span identifiers correlating to the OpenTelemetry trace.
@@ -111,19 +112,20 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 - **FR-59** Destinations that cannot be brokered (model provider APIs, git remotes) must be reached through a transparent host-side interceptor that injects credentials on egress.
 - **FR-60** Guest-visible environment variables for intercepted services must contain the literal string `credential-brokered`.
 - **FR-61** The interceptor allowlist must be configuration, not code.
+- **FR-62** The host must observe blocked direct egress with an nftables or iptables log rule placed immediately before the final DROP on the guest network path. The rule must cover the Firecracker tap interface and the container driver's network namespace. A host-side collector must convert each logged drop into a `network_denied` audit record containing only destination, protocol, and timestamp within one second of the attempt.
 
 ## 4. Non-functional requirements
 
 - **NFR-1** Warm session start must be under one second at p50 on the reference machine. Cold start must be measured and published.
 - **NFR-2** Broker overhead excluding downstream call latency must be under fifty milliseconds at p99.
 - **NFR-3** Policy evaluation must be under five milliseconds at p99.
-- **NFR-4** The audit write on the critical path must be under ten milliseconds at p99, and must fail the action rather than be dropped.
+- **NFR-4** Each direct audit write on the critical path must be under ten milliseconds at p99. A failed pre-execution write must fail the operation. A failed direct post-execution write must enter the durable completion buffer rather than be dropped.
 - **NFR-5** The system must run end to end on a developer laptop with no hardware virtualisation via `docker compose up`.
 - **NFR-6** All boundaries must validate with schemas. TypeScript strict mode. No `any` outside vendored type declarations.
 - **NFR-7** All published performance numbers must be reproducible from a script in `benchmarks/` and must state machine specifications.
 - **NFR-8** No secret value may be written to a log, a span attribute, an error message, or an audit record.
 - **NFR-9** Invariant tests must run on every pull request and must not be skippable.
-- **NFR-10** The system must degrade safely: unavailable policy engine, unavailable secret backend, and unavailable audit store must each cause actions to fail closed, not open.
+- **NFR-10** The system must degrade safely: an unavailable policy engine or secret backend must fail closed. An unavailable audit store must fail closed before execution and fail durable after execution as specified by FR-23, FR-26, and ADR-10.
 
 ## 5. Constraints
 

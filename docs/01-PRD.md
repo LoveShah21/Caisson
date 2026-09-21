@@ -15,7 +15,7 @@ The gap: nothing open source combines sealed execution, credential brokering, gr
 
 ## 2. Product summary
 
-Caisson runs an LLM agent inside a hardware-isolated microVM with no network route except a host-side broker. The agent never sees a credential. It requests actions by name. The broker resolves identity, evaluates policy, optionally blocks for a human, executes the call with the real secret, redacts the response, logs everything, and returns the result.
+Caisson runs an LLM agent inside a hardware-isolated microVM with no network route except a host-side broker and destinations explicitly allowlisted for interception. The agent never sees a credential. It requests actions by name. The broker resolves identity, evaluates policy, optionally blocks for a human, executes the call with the real secret, redacts the response, logs everything, and returns the result.
 
 The claim Caisson makes, and must be able to defend with tests:
 
@@ -46,6 +46,7 @@ The claim Caisson makes, and must be able to defend with tests:
 - N4. Not multi-region, not multi-tenant in v1. Tenancy is a stretch item with real schema implications, called out in `11-ROADMAP.md`.
 - N5. Not a polished UI product. The approval interface is functional and plain by design.
 - N6. Not a secrets manager. Caisson consumes one through an interface.
+- N7. Not a system for rotating session tokens mid-session. V1 mints one token per session, bounds its lifetime by the session TTL, and revokes it on termination or manual revoke.
 
 ## 6. Core user journeys
 

@@ -69,7 +69,7 @@ For approver reconnect (FR-48).
 ### Policy administration
 - `POST /v1/policy/bundles` with `{ version, regoSource, notes }`. Compiles to wasm, runs the bundle's Rego tests, rejects on failure.
 - `POST /v1/policy/bundles/:id/activate`
-- `POST /v1/policy/simulate` with a full policy input document, returns the decision without side effects. This is how you debug policy without burning a session.
+- `POST /v1/policy/simulate` with a full policy input document, returns the decision and matched rule names without executing the action. Each request writes an audit record with `action_type='policy_simulate'`; these records are excluded from real per-session replay views. This is how you debug policy without burning a session.
 
 ### Health
 - `GET /healthz` liveness.
@@ -127,7 +127,7 @@ Denial:
 Denials are structured so the agent can adapt rather than retry blindly (FR-45). `details` never leaks anything the agent was not already entitled to know.
 
 ### Other ops
-`fs.read`, `fs.write`, `fs.edit`, `fs.search`, `proc.exec`, `user.ask`.
+`fs.read`, `fs.write`, `fs.edit`, `fs.search`, `proc.exec`, `user.ask`. All cross the same vsock transport and are audited outside the guest. Together with `broker.call`, they are the seven operations covered by FR-55 and INV-4.
 
 `proc.exec` request body is `{ "argv": ["rg","-n","checkout","src/"], "cwd": "/workspace", "timeoutMs": 30000 }`. There is no `command` string field, no `shell` flag, and no way to add one. FR-41.
 

@@ -55,22 +55,33 @@ Never weaken this test to make it pass. If it fails, the architecture is wrong.
 A `FaultInjector` in `packages/testkit` can make any dependency fail on command. Required scenarios:
 
 - ClickHouse unavailable during a brokered call: action fails, service never contacted.
+- ClickHouse direct completion write fails after a side-effecting call: terminal record enters the durable completion buffer, the external effect is reported truthfully, and reconciliation later writes the record.
+- A stale `action.started` has no terminal row: reconciliation flags it as orphaned.
 - Vault unavailable: `SECRET_UNAVAILABLE`, nothing partial.
 - Policy wasm fails to load: all actions denied, not allowed.
 - Sandbox killed mid-action: session recovers from snapshot, agent told the truth.
 - Broker killed mid-action: session terminates, audit shows `started` without `completed`, and the gap is detectable by sequence number.
 - Redis lost: approvals in flight fail closed.
 
-Every one asserts fail-closed. NFR-10.
+Each scenario asserts the safe failure mode in NFR-10. Controls fail closed before execution. Completion audit fails durable after execution.
 
 ## 7. Performance tests
 
-In `benchmarks/`, each a runnable script that prints machine specifications with its results.
+In `benchmarks/`, each benchmark is a runnable script. Every run records the hardware and software actually used in `benchmarks/results/machine.md`. Do not substitute a fixed reference machine or normalize results from one machine to another.
 
 - `bench-boot.ts`: cold and warm session start, p50 and p99, both drivers.
 - `bench-broker.ts`: broker overhead excluding downstream, by service, p50 and p99.
 - `bench-policy.ts`: wasm evaluation latency across bundle sizes.
 - `bench-concurrency.ts`: fifty concurrent sessions, boot contention, error rate.
+
+The procedure is fixed:
+
+- Warm boot means the base snapshot is already present in the local disk cache before the timed restore.
+- Cold boot means the local cache is empty and the snapshot is fetched from the configured S3-compatible store during the timed operation.
+- Broker overhead uses one trivial call per adapter, such as `SELECT 1` for postgres, with the connection pool already warmed. Pool-cold latency is measured separately and labelled as pool-cold.
+- Each reported condition has at least two hundred samples.
+- Percentiles use nearest-rank over the sorted samples and are computed by the benchmark script. They are never estimated from a chart.
+- The concurrency test starts fifty session creations concurrently with no client-side throttling and reports the full completion-time distribution and error rate.
 
 Publish measured numbers only. If a target is missed, publish the miss and explain it. A missed target with an honest explanation is a better engineering signal than a target that was quietly adjusted.
 

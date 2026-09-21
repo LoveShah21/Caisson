@@ -15,8 +15,10 @@ One trace per session. Every action is a span inside it. If an incident responde
 | `caisson.approval.wait` | broker.call | `approval.id`, `wait.ms`, `outcome` |
 | `caisson.service.<name>.<method>` | broker.call | `duration.ms`, `result.bytes`, `retries` |
 | `caisson.redaction` | broker.call | `count`, `detectors.fired` |
-| `caisson.audit.write` | broker.call | `phase` (started/completed), `write.ms` |
+| `caisson.audit.write` | broker.call | `event.type`, `write.path` (direct/buffer), `write.ms` |
+| `caisson.audit.buffer` | broker.call | `event.type`, `buffer.kind`, `enqueue.ms` |
 | `caisson.guest.exec` | session.create | `binary`, `exit.code`, `duration.ms` |
+| `caisson.egress.denied` | session.create | `network.destination`, `network.protocol` |
 | `caisson.snapshot.build` | root | `kind`, `size.bytes`, `build.ms` |
 
 Rules:
@@ -38,6 +40,9 @@ Rules:
 | `caisson_sessions_active` | gauge | `driver` |
 | `caisson_session_duration_seconds` | histogram | `termination_reason` |
 | `caisson_fail_closed_total` | counter | `component` |
+| `caisson_audit_completion_buffer_depth` | gauge | `buffer_kind` |
+| `caisson_audit_orphaned_actions_total` | counter | `action_type` |
+| `caisson_network_denied_total` | counter | `protocol` |
 
 `caisson_fail_closed_total` deserves comment. It counts every time the system refused rather than degraded. It should never be zero in a system under real use, and a sudden change in it is one of the more informative signals available.
 
@@ -56,14 +61,20 @@ Three Grafana dashboards, provisioned as code in `deploy/grafana/`.
 | Alert | Condition |
 |---|---|
 | Audit store unreachable | any `AUDIT_UNAVAILABLE` in five minutes |
+| Completion buffer backlog | any completion record remains buffered past the reconciliation threshold |
+| Orphaned action | any `action.started` remains without a terminal row past the reconciliation threshold |
 | Denial spike | denial rate above three standard deviations of the seven-day baseline |
 | Approval starvation | any pending approval older than half its timeout |
 | Unisolated production session | any session with `hardware_isolated = false` in production |
 | Boot degradation | p99 warm boot above two seconds for ten minutes |
 | Sequence gap | a session with non-contiguous `seq` values in `actions` |
 
-The sequence-gap alert is the tripwire for INV-4. It is the one that tells you the audit trail is lying.
+The sequence-gap and orphaned-action alerts are the tripwires for INV-4. Either means the audit trail may be incomplete and requires reconciliation.
 
-## 6. What the operator sees live
+## 6. Audit reconciliation
+
+A host-side job scans for `action.started` records without a matching terminal record past a configured threshold. It marks them orphaned, emits the orphaned-action metric and alert, and keeps them visible until an operator resolves the cause. In parallel, it drains durable completion-buffer entries to ClickHouse and removes an entry only after ClickHouse acknowledges the terminal row. Sequence gaps remain a separate check because they can expose a missing record that has no surviving start row.
+
+## 7. What the operator sees live
 
 Over the session websocket: status transitions, `agent.step` events with tool name and decision, approval requests and resolutions, and final output. Enough to watch a session happen without reading logs.

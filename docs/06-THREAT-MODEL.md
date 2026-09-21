@@ -35,20 +35,20 @@ No credential value exists inside the sandbox: not in memory, not in an environm
 *Test:* run a session that greps the entire guest filesystem, environment, and process table for the known test secret; assert zero hits; assert the same after a successful brokered call that used it.
 
 **INV-2. No unbrokered egress.**
-From inside the sandbox every outbound connection except the vsock to the broker and allowlisted intercepted hosts fails.
-*Test:* raw TCP to a host IP, UDP DNS to 8.8.8.8, HTTP to an IP literal bypassing DNS, IPv6 literal, ICMP, a connection to the host's own interface, and an attempt to reach the metadata endpoint at 169.254.169.254. All must fail, all must be logged.
+From inside the sandbox every outbound connection except the vsock to the broker and destinations explicitly allowlisted for interception fails.
+*Test:* raw TCP to a host IP, UDP DNS to 8.8.8.8, HTTP to an IP literal bypassing DNS, IPv6 literal, ICMP, a connection to the host's own interface, and an attempt to reach the metadata endpoint at 169.254.169.254. All must fail. For each attempt, assert that the host-side egress monitor produces a `network_denied` audit record with destination, protocol, and timestamp within one second.
 
 **INV-3. Policy is enforced outside the guest.**
 Identity, scopes, and roles come from the control plane record resolved through the transport binding. Nothing the guest sends can influence them.
 *Test:* a guest that sends forged `sessionId`, `scopes`, `roles`, and `token` fields in every request gains no additional capability.
 
 **INV-4. No action escapes the log.**
-Every action produces an audit record before execution and after completion. An audit write failure fails the action.
-*Test:* fault-inject a ClickHouse outage during a brokered call; assert the call fails with `AUDIT_UNAVAILABLE` and the service was never contacted. Separately, assert sequence numbers within a session contain no gaps.
+Every guest operation, including `read`, `write`, `edit`, `exec`, `search`, `broker`, and `ask_user`, is audited outside the guest. Executable operations produce `action.started` before execution and a durable `action.completed` or `action.failed` after execution. A denial is one terminal record. An approval produces a record when requested and another when resolved. Failure to write a required pre-execution record fails the operation before a credential is touched. Failure of the direct post-execution write routes the terminal record through the durable completion buffer and never drops it.
+*Test:* exercise all seven guest operations and assert matching audit records. Fault-inject a ClickHouse outage before a brokered call; assert the call fails with `AUDIT_UNAVAILABLE` and the service was never contacted. Separately, allow a side-effecting call to finish and fail its direct completion write; assert the record enters the durable buffer, is later written, and the result is not represented as a denial. Create a stale `action.started` without a terminal record; assert the reconciliation job flags it as orphaned. Assert sequence numbers within a session contain no gaps.
 
 **INV-5. Tokens are scoped and expiring.**
-A token carries a scope snapshot and an expiry, fails closed when expired, and cannot be widened from inside the session.
-*Test:* freeze time past expiry mid-session; assert failure. Attempt scope widening through every guest-reachable path; assert no change.
+The control plane mints one token at session creation, persists only its argon2id hash, snapshots its scopes, and bounds its lifetime by the session TTL. The guest never receives or presents the token and the protocol has no token field. On every call the broker resolves the host-established vsock binding, loads the bound token row, and checks its scope snapshot, `expires_at`, and `revoked_at`. Termination and manual revocation set `revoked_at`. V1 does not rotate tokens mid-session.
+*Test:* assert the API response, guest environment, filesystem, process table, and guest-to-broker frames contain no token. Freeze time past expiry mid-session and assert failure. Set `revoked_at` and assert the next call fails. Attempt scope widening and binding forgery through every guest-reachable path; assert no change.
 
 **INV-6. Approvals cannot be forged.**
 Approval is correlated by a server-generated nonce never exposed to the guest, and the decision is signed by the control plane.

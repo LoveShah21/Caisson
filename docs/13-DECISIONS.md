@@ -107,6 +107,20 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 ---
 
+## ADR-10: Audit is fail-closed before execution and fail-durable after execution
+**Date:** 2026-09-21
+**Status:** accepted
+
+**Decision:** This decision supersedes ADR-7 for post-execution writes; ADR-7 remains in force before execution. A required audit write before execution is synchronous and fail-closed. An executable operation writes `action.started`; a denial writes one terminal record; an approval writes a record when created and another when resolved. No credential is fetched and no operation executes until the required pre-execution record is durable in ClickHouse. After execution, `action.completed` or `action.failed` is fail-durable. ClickHouse remains the fast path, but a failed direct write is appended to a persistent Redis stream or an on-disk broker WAL and retried until accepted. The result is returned only after ClickHouse or the durable buffer accepts the record. A reconciliation job flags stale starts without terminal records as orphaned and drains the buffer. Retries retain the original session sequence and action identity so consumers can collapse duplicate delivery.
+
+**Alternatives:** Treat every audit failure as fail-closed, including after execution; write all audit records asynchronously; use a distributed transaction with each external service.
+
+**Reasoning:** Before execution, failing the action preserves the invariant because no external effect has occurred. After a side-effecting call succeeds, refusing to return its result cannot undo the effect and can cause the agent to retry it. Asynchronous fire-and-forget writes can be lost. A distributed transaction is unavailable across the supported services. A durable completion path records what actually happened and exposes incomplete pairs for repair.
+
+**Consequences:** The broker needs a durable completion buffer and idempotent retry behavior. Redis must have persistence enabled if its stream is used; otherwise the broker WAL must survive process restart. Operators need backlog and orphan alerts. ClickHouse outages still stop new actions at the pre-execution write, while already-executed completions continue through the durable path. A crash between the external effect and durable enqueue can still leave an orphaned start; reconciliation makes that condition visible but cannot reconstruct an unknowable service result.
+
+---
+
 ## Template for new entries
 
 ```
