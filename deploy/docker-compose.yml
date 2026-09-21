@@ -1,0 +1,87 @@
+name: caisson
+
+services:
+  postgres:
+    image: postgres:17.11-alpine3.24
+    environment:
+      POSTGRES_DB: caisson
+      POSTGRES_USER: caisson
+      POSTGRES_PASSWORD: ${CAISSON_POSTGRES_PASSWORD:-caisson-postgres-local-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../packages/db/migrations/0001_m0_foundations.sql:/docker-entrypoint-initdb.d/0001_m0_foundations.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caisson -d caisson"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8.3-alpine
+    environment:
+      CLICKHOUSE_DB: caisson
+      CLICKHOUSE_USER: caisson
+      CLICKHOUSE_PASSWORD: ${CAISSON_CLICKHOUSE_PASSWORD:-caisson-clickhouse-local-only}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9002:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "caisson", "--password", "${CAISSON_CLICKHOUSE_PASSWORD:-caisson-clickhouse-local-only}", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:8.10.1-alpine3.23
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 2s
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${CAISSON_MINIO_USER:-caisson}
+      MINIO_ROOT_PASSWORD: ${CAISSON_MINIO_PASSWORD:-caisson-minio-local-only}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  redis-data:
+  minio-data:
