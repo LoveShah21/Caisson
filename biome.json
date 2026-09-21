@@ -1,6 +1,6 @@
 {
   "files": {
-    "includes": ["**", "!!**/dist", "!!**/coverage"]
+    "includes": ["**", "!!**/node_modules", "!!**/.turbo", "!!**/dist", "!!**/coverage"]
   },
   "formatter": {
     "enabled": true,
