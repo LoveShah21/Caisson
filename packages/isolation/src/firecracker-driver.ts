@@ -1,6 +1,7 @@
+import type { SpawnOptions } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, constants, mkdir, rm } from "node:fs/promises";
+import { access, constants, mkdir, open, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { CaissonError, type DriverCapabilities } from "@caisson/protocol";
@@ -48,9 +49,18 @@ export interface FirecrackerDriverOptions {
 
 interface FirecrackerRecord {
   readonly apiSocketPath: string;
+  readonly logPath: string;
   readonly process: ChildProcess;
   readonly runtimePath: string;
   readonly vsockPath: string;
+}
+
+export function firecrackerProcessSpawnOptions(logFileDescriptor: number): SpawnOptions {
+  return {
+    shell: false,
+    stdio: ["ignore", logFileDescriptor, logFileDescriptor],
+    windowsHide: true,
+  };
 }
 
 /**
@@ -233,13 +243,21 @@ export class FirecrackerDriver implements IsolationDriver {
     const runtimePath = join(this.#options.runtimeDirectory, this.#safePathSegment(sessionId));
     const apiSocketPath = join(runtimePath, "firecracker.sock");
     const vsockPath = join(runtimePath, "vsock.sock");
+    const logPath = join(runtimePath, "firecracker.log");
     await mkdir(runtimePath, { recursive: true });
-    const process = spawn(this.#options.firecrackerPath, ["--api-sock", apiSocketPath], {
-      shell: false,
-      stdio: "ignore",
-    });
+    const logFile = await open(logPath, "a");
+    let process: ChildProcess;
+    try {
+      process = spawn(
+        this.#options.firecrackerPath,
+        ["--api-sock", apiSocketPath],
+        firecrackerProcessSpawnOptions(logFile.fd),
+      );
+    } finally {
+      await logFile.close();
+    }
     await this.#waitForApiSocket(process, apiSocketPath);
-    return { apiSocketPath, process, runtimePath, vsockPath };
+    return { apiSocketPath, logPath, process, runtimePath, vsockPath };
   }
 
   async #stopProcess(record: FirecrackerRecord): Promise<void> {

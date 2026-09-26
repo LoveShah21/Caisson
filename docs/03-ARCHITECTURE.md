@@ -58,7 +58,7 @@ Fastify. Owns session records, the websocket hub for approvals and `ask_user`, t
 The choke point. One process per sandbox host. Holds a vsock listener, an adapter registry, a policy evaluator, a secret client, a redaction pipeline, an audit writer, and a durable completion buffer. A direct ClickHouse write is the fast path. A persistent Redis stream or on-disk WAL retains post-execution records when ClickHouse is unavailable. Deliberately small and deliberately boring; this is the code a security reviewer will read line by line.
 
 ### Isolation (`packages/isolation`)
-`IsolationDriver` plus `FirecrackerDriver` and `ContainerDriver`. Firecracker is driven directly over its REST API on a unix socket; no third-party SDK is needed for the small surface used here. See ADR-4.
+`IsolationDriver` plus `FirecrackerDriver` and `ContainerDriver`. Firecracker is driven directly over its REST API on a unix socket; no third-party SDK is needed for the small surface used here. Its stdin is detached from the controlling terminal and stdout and stderr are written to a per-sandbox host log file. See ADR-4.
 
 ### Agent runtime (`apps/agent-runtime`)
 Runs in the guest. Seven tools, a skill loader, a structured error handler, and a vsock client. All seven tool operations cross vsock and are audited outside the guest. It has no HTTP client and no shell.
