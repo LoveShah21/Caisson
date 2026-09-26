@@ -13,7 +13,8 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "turbo run lint",
-    "test": "turbo run test",
+    "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
+    "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
