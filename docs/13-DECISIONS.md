@@ -121,6 +121,17 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 ---
 
+## ADR-11: IsolationDriver.exec is an infrastructure primitive, not an agent capability
+**Status:** accepted
+
+**Alternatives:** Add `echo`, and by extension whatever else lifecycle probes need, to the guest v1 allowlist in `08-AGENT-RUNTIME.md`.
+
+**Reasoning:** `IsolationDriver.exec` is used by the control plane to verify that a sandbox booted and is alive. It is a health check, not something an agent invokes. The guest-side `exec` tool and its INV-8 allowlist govern agent capability during a live session and are implemented separately in `apps/agent-runtime`, reachable only through the broker. Widening the agent-facing allowlist to accommodate an infrastructure health check would be capability creep with no corresponding product need. The agent never needs to run `echo`.
+
+**Consequences:** Two things share the name `exec` at different layers. Anyone extending `IsolationDriver.exec` usage must confirm that it remains confined to control-plane and test contexts and is never wired into the broker request path for live agent actions.
+
+---
+
 ## Template for new entries
 
 ```

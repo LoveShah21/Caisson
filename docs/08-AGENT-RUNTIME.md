@@ -18,6 +18,8 @@ There is no HTTP client in the guest. There is no shell. There is no package ins
 | `broker` | `(service, method, params, intent)` | The only route for named service actions. Explicitly allowlisted intercepted destinations are the separate exception. |
 | `ask_user` | `(question, options?)` | Routed to the approval websocket, same timeout semantics as approvals. |
 
+This table defines guest-side agent tools only. It does not govern `IsolationDriver.exec`, which is a separate infrastructure-only lifecycle primitive defined in `05-API-CONTRACTS.md`; it is never reachable from an agent, broker request, or guest-to-broker frame.
+
 ### exec allowlist (v1)
 
 `rg`, `jq`, `git` (fetch, clone, log, diff, status only, enforced by subcommand check), `node` (restricted to the workspace, no network), `python3` (same), `cat`, `ls`, `head`, `tail`, `wc`, `sort`, `uniq`, `diff`.
