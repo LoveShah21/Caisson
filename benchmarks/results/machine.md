@@ -1,0 +1,8 @@
+- platform: win32
+- release: 10.0.26200
+- architecture: x64
+- node: v24.12.0
+- docker: 29.8.0
+- cpuModel: Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz
+- cpuCount: 8
+- memoryBytes: 8419024896

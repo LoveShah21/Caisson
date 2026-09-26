@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["CAISSON_BENCH_IMAGE", "CAISSON_BENCH_SAMPLES"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
