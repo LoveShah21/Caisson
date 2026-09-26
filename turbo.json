@@ -1,6 +1,16 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalEnv": ["CAISSON_BENCH_IMAGE", "CAISSON_BENCH_SAMPLES"],
+  "globalEnv": [
+    "CAISSON_BENCH_IMAGE",
+    "CAISSON_BENCH_SAMPLES",
+    "CAISSON_ENV",
+    "CAISSON_MANUAL_FC_TEST",
+    "CAISSON_FIRECRACKER_BIN",
+    "CAISSON_FIRECRACKER_KERNEL",
+    "CAISSON_FIRECRACKER_ROOTFS",
+    "CAISSON_FIRECRACKER_RUNTIME_DIR",
+    "CAISSON_FIRECRACKER_SNAPSHOT_DIR"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

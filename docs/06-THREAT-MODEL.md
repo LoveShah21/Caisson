@@ -60,7 +60,7 @@ Sandbox disk and memory are destroyed at termination. Nothing written by one ses
 
 **INV-8. Subprocess allowlist holds.**
 Only allowlisted binaries execute, `git` is fetch-only, and no shell is invoked.
-*Test:* attempt `sh -c`, argv injection with metacharacters, symlinking an allowlisted name to a disallowed binary, PATH manipulation, `LD_PRELOAD`, and executing an uploaded binary from the workspace. All must fail.
+*Test:* from M-3 onward, once `apps/agent-runtime` implements the real guest-side `exec` tool, attempt `sh -c`, argv injection with metacharacters, symlinking an allowlisted name to a disallowed binary, PATH manipulation, `LD_PRELOAD`, and executing an uploaded binary from the workspace. All must fail. M-1's `IsolationDriver.exec(["/bin/echo", "hello"])` check is a separate driver-mechanism test using the temporary development probe from ADR-12. It does not exercise an allowlist and does not count as INV-8.
 
 ## 4. Mapping adversaries to defences
 

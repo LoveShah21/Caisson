@@ -7,3 +7,4 @@ coverage/
 .env
 .env.*
 !.env.example
+guest/rootfs/m1-dev-probe-rootfs.ext4

@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, constants, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { CaissonError, type DriverCapabilities } from "@caisson/protocol";
 
@@ -14,12 +14,22 @@ import type {
   SandboxSpec,
   SnapshotRef,
 } from "./types.js";
+import { CAISSON_INFRA_PROBE_PORT } from "./vsock-infrastructure-probe.js";
 
 const DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off";
 const DEFAULT_MAX_CONCURRENT = 50;
 
 export interface InfrastructureProbe {
-  execute(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult>;
+  execute(
+    handle: SandboxHandle,
+    request: ExecRequest,
+    context: InfrastructureProbeContext,
+  ): Promise<ExecResult>;
+}
+
+export interface InfrastructureProbeContext {
+  readonly vsockPath: string;
+  readonly port: number;
 }
 
 export interface FirecrackerDriverOptions {
@@ -72,6 +82,7 @@ export class FirecrackerDriver implements IsolationDriver {
   }
 
   async create(spec: SandboxSpec): Promise<SandboxHandle> {
+    this.#assertProductionRootfs();
     await this.#assertHostRequirements();
     if (this.#records.size >= this.#options.maxConcurrent) {
       throw new CaissonError("SANDBOX_FAILED", "Firecracker driver concurrency limit reached");
@@ -123,7 +134,11 @@ export class FirecrackerDriver implements IsolationDriver {
         "Firecracker infrastructure probe is not configured",
       );
     }
-    return this.#options.infrastructureProbe.execute(handle, request);
+    const record = this.#getRecord(handle);
+    return this.#options.infrastructureProbe.execute(handle, request, {
+      vsockPath: record.vsockPath,
+      port: CAISSON_INFRA_PROBE_PORT,
+    });
   }
 
   async snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<SnapshotRef> {
@@ -155,6 +170,7 @@ export class FirecrackerDriver implements IsolationDriver {
   }
 
   async restore(ref: SnapshotRef, spec: SandboxSpec): Promise<SandboxHandle> {
+    this.#assertProductionRootfs();
     await this.#assertHostRequirements();
     const record = await this.#startProcess(spec.id);
     try {
@@ -196,6 +212,19 @@ export class FirecrackerDriver implements IsolationDriver {
         "Firecracker host requirements are unavailable",
         undefined,
         error,
+      );
+    }
+  }
+
+  #assertProductionRootfs(): void {
+    const environment: unknown = Reflect.get(process.env, "CAISSON_ENV");
+    if (
+      environment === "production" &&
+      basename(this.#options.rootfsPath) === "m1-dev-probe-rootfs.ext4"
+    ) {
+      throw new CaissonError(
+        "SANDBOX_FAILED",
+        "production refuses the M-1 development probe rootfs",
       );
     }
   }

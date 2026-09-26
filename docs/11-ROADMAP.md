@@ -13,8 +13,8 @@ pnpm workspace, Turborepo, strict TypeScript, `packages/protocol` with the error
 FR-1 to FR-17 and FR-62. `IsolationDriver`, both implementations, session state machine, snapshot build and restore, base snapshot scheduler, session reaper, boot spans, network policy, and the host-side egress monitor.
 
 **Gate:**
-- A session boots, runs `exec(["echo","hello"])`, and destroys cleanly on both drivers.
-- INV-7 and INV-8 pass.
+- A session boots, runs `IsolationDriver.exec(["/bin/echo","hello"])` through the temporary M-1 development probe, returns its output, and destroys cleanly on both drivers. This is a driver-mechanism check, not an INV-8 test.
+- INV-7 passes. INV-8 begins in M-3 with the real guest-side agent runtime `exec` tool and its allowlist.
 - Production mode refuses to start on the container driver (FR-11).
 - `bench-boot.ts` exists and cold and warm numbers are recorded in `benchmarks/results/`.
 
