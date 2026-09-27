@@ -100,32 +100,32 @@ export class FirecrackerDriver implements IsolationDriver {
 
     const record = await this.#startProcess(spec.id);
     try {
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/machine-config", {
+      await this.#callApi(record, "PUT", "/machine-config", {
         vcpu_count: this.#options.vcpuCount,
         mem_size_mib: this.#options.memoryMiB,
         smt: false,
       });
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/boot-source", {
+      await this.#callApi(record, "PUT", "/boot-source", {
         kernel_image_path: this.#options.kernelImagePath,
         boot_args: this.#options.bootArgs,
       });
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/drives/rootfs", {
+      await this.#callApi(record, "PUT", "/drives/rootfs", {
         drive_id: "rootfs",
         path_on_host: this.#options.rootfsPath,
         is_root_device: true,
         is_read_only: true,
       });
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/vsock", {
+      await this.#callApi(record, "PUT", "/vsock", {
         guest_cid: this.#guestCidFor(spec.id),
         uds_path: record.vsockPath,
       });
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/actions", {
+      await this.#callApi(record, "PUT", "/actions", {
         action_type: "InstanceStart",
       });
       this.#records.set(spec.id, record);
       return { id: spec.id, driver: "firecracker" };
     } catch (error: unknown) {
-      await this.#stopProcess(record);
+      await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
       throw error;
     }
   }
@@ -158,15 +158,15 @@ export class FirecrackerDriver implements IsolationDriver {
     const statePath = join(this.#options.snapshotDirectory, `${id}.state`);
     const memoryPath = join(this.#options.snapshotDirectory, `${id}.memory`);
 
-    await callFirecrackerApi(record.apiSocketPath, "PATCH", "/vm", { state: "Paused" });
+    await this.#callApi(record, "PATCH", "/vm", { state: "Paused" });
     try {
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/snapshot/create", {
+      await this.#callApi(record, "PUT", "/snapshot/create", {
         snapshot_type: "Full",
         snapshot_path: statePath,
         mem_file_path: memoryPath,
       });
     } finally {
-      await callFirecrackerApi(record.apiSocketPath, "PATCH", "/vm", { state: "Resumed" });
+      await this.#callApi(record, "PATCH", "/vm", { state: "Resumed" });
     }
 
     return {
@@ -184,7 +184,7 @@ export class FirecrackerDriver implements IsolationDriver {
     await this.#assertHostRequirements();
     const record = await this.#startProcess(spec.id);
     try {
-      await callFirecrackerApi(record.apiSocketPath, "PUT", "/snapshot/load", {
+      await this.#callApi(record, "PUT", "/snapshot/load", {
         snapshot_path: ref.statePath,
         mem_file_path: ref.memoryPath,
         resume_vm: true,
@@ -193,7 +193,7 @@ export class FirecrackerDriver implements IsolationDriver {
       this.#records.set(spec.id, record);
       return { id: spec.id, driver: "firecracker" };
     } catch (error: unknown) {
-      await this.#stopProcess(record);
+      await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
       throw error;
     }
   }
@@ -247,28 +247,50 @@ export class FirecrackerDriver implements IsolationDriver {
     await mkdir(runtimePath, { recursive: true });
     const logFile = await open(logPath, "a");
     let process: ChildProcess;
+    let spawnError: unknown;
     try {
+      this.#diagnostic("spawning Firecracker process");
       process = spawn(
         this.#options.firecrackerPath,
         ["--api-sock", apiSocketPath],
         firecrackerProcessSpawnOptions(logFile.fd),
       );
+      process.once("error", (error: Error) => {
+        spawnError = error;
+      });
     } finally {
       await logFile.close();
     }
-    await this.#waitForApiSocket(process, apiSocketPath);
+    this.#diagnostic("waiting for Firecracker API socket");
+    await this.#waitForApiSocket(process, apiSocketPath, () => spawnError);
+    this.#diagnostic("Firecracker API socket is ready");
     return { apiSocketPath, logPath, process, runtimePath, vsockPath };
   }
 
-  async #stopProcess(record: FirecrackerRecord): Promise<void> {
+  async #stopProcess(record: FirecrackerRecord, preserveRuntime = false): Promise<void> {
     if (!record.process.killed) {
       record.process.kill("SIGKILL");
     }
-    await rm(record.runtimePath, { force: true, recursive: true });
+    if (!preserveRuntime) {
+      await rm(record.runtimePath, { force: true, recursive: true });
+    }
   }
 
-  async #waitForApiSocket(process: ChildProcess, apiSocketPath: string): Promise<void> {
+  async #waitForApiSocket(
+    process: ChildProcess,
+    apiSocketPath: string,
+    getSpawnError: () => unknown,
+  ): Promise<void> {
     for (let attempt = 0; attempt < 100; attempt += 1) {
+      const spawnError = getSpawnError();
+      if (spawnError !== undefined) {
+        throw new CaissonError(
+          "SANDBOX_FAILED",
+          "Firecracker process could not start",
+          undefined,
+          spawnError,
+        );
+      }
       if (process.exitCode !== null) {
         throw new CaissonError(
           "SANDBOX_FAILED",
@@ -283,6 +305,26 @@ export class FirecrackerDriver implements IsolationDriver {
       }
     }
     throw new CaissonError("SANDBOX_FAILED", "Firecracker did not open its API socket");
+  }
+
+  async #callApi(
+    record: FirecrackerRecord,
+    method: "GET" | "PATCH" | "PUT",
+    path: string,
+    body?: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    this.#diagnostic(`sending Firecracker API request: ${method} ${path}`);
+    await callFirecrackerApi(record.apiSocketPath, method, path, body);
+  }
+
+  #manualDiagnosticsEnabled(): boolean {
+    return Reflect.get(process.env, "CAISSON_MANUAL_FC_TEST") === "1";
+  }
+
+  #diagnostic(message: string): void {
+    if (this.#manualDiagnosticsEnabled()) {
+      console.log(`FirecrackerDriver: ${message}`);
+    }
   }
 
   #getRecord(handle: SandboxHandle): FirecrackerRecord {

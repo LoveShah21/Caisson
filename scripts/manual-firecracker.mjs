@@ -43,9 +43,11 @@ const driver = new FirecrackerDriver({
 });
 
 const spec = { id: randomUUID(), image: "m1-dev-probe" };
+const firstRuntimePath = `${process.env.CAISSON_FIRECRACKER_RUNTIME_DIR}/${spec.id}`;
 let first;
 let restored;
 try {
+  console.log("START create: driver will spawn Firecracker and configure the API");
   first = await driver.create(spec);
   console.log("PASS create");
 
@@ -76,6 +78,8 @@ try {
   console.log("PASS destroy restored");
 } catch (error) {
   console.error("FAIL Firecracker manual integration", error);
+  console.error(`Failure artifacts, if retained: ${firstRuntimePath}`);
+  console.error(`Firecracker log, if retained: ${firstRuntimePath}/firecracker.log`);
   process.exitCode = 1;
 } finally {
   await Promise.all([

@@ -29,7 +29,9 @@ export async function callFirecrackerApi(
     let response = "";
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new CaissonError("SANDBOX_FAILED", "Firecracker API request timed out"));
+      reject(
+        new CaissonError("SANDBOX_FAILED", `Firecracker API request timed out: ${method} ${path}`),
+      );
     }, 5_000);
 
     socket.setEncoding("utf8");
