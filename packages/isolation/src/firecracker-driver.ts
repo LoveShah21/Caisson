@@ -18,9 +18,11 @@ import type {
 import { CAISSON_INFRA_PROBE_PORT } from "./vsock-infrastructure-probe.js";
 
 const DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off";
+const DEFAULT_GUEST_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_CONCURRENT = 50;
 
 export interface InfrastructureProbe {
+  waitForReady(context: InfrastructureProbeContext, timeoutMs: number): Promise<void>;
   execute(
     handle: SandboxHandle,
     request: ExecRequest,
@@ -122,6 +124,7 @@ export class FirecrackerDriver implements IsolationDriver {
       await this.#callApi(record, "PUT", "/actions", {
         action_type: "InstanceStart",
       });
+      await this.#waitForGuestReady(record);
       this.#records.set(spec.id, record);
       return { id: spec.id, driver: "firecracker" };
     } catch (error: unknown) {
@@ -190,6 +193,7 @@ export class FirecrackerDriver implements IsolationDriver {
         resume_vm: true,
         vsock_override: { uds_path: record.vsockPath },
       });
+      await this.#waitForGuestReady(record);
       this.#records.set(spec.id, record);
       return { id: spec.id, driver: "firecracker" };
     } catch (error: unknown) {
@@ -315,6 +319,21 @@ export class FirecrackerDriver implements IsolationDriver {
   ): Promise<void> {
     this.#diagnostic(`sending Firecracker API request: ${method} ${path}`);
     await callFirecrackerApi(record.apiSocketPath, method, path, body);
+  }
+
+  async #waitForGuestReady(record: FirecrackerRecord): Promise<void> {
+    if (this.#options.infrastructureProbe === undefined) {
+      throw new CaissonError(
+        "SANDBOX_FAILED",
+        "Firecracker infrastructure probe is required to confirm guest readiness",
+      );
+    }
+    this.#diagnostic("waiting for guest vsock readiness");
+    await this.#options.infrastructureProbe.waitForReady(
+      { port: CAISSON_INFRA_PROBE_PORT, vsockPath: record.vsockPath },
+      DEFAULT_GUEST_READY_TIMEOUT_MS,
+    );
+    this.#diagnostic("guest vsock is ready");
   }
 
   #manualDiagnosticsEnabled(): boolean {

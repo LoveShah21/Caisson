@@ -36,6 +36,10 @@ function parseResponse(value: unknown): ExecResult {
  * broker request path. The guest probe accepts arbitrary argv by design.
  */
 export class VsockInfrastructureProbe implements InfrastructureProbe {
+  async waitForReady(context: InfrastructureProbeContext, timeoutMs: number): Promise<void> {
+    await waitForReady(context.vsockPath, context.port, timeoutMs);
+  }
+
   async execute(
     _handle: SandboxHandle,
     request: ExecRequest,
@@ -79,7 +83,7 @@ async function exchange(
     try {
       return await exchangeOnce(socketPath, port, payload, Math.min(remainingMs, 1_000));
     } catch (error: unknown) {
-      if (!(error instanceof ProbeConnectionError) || error.connected) {
+      if (!(error instanceof ProbeConnectionError) || !error.retryable) {
         throw new CaissonError(
           "SANDBOX_FAILED",
           "development probe connection failed",
@@ -102,10 +106,104 @@ async function exchange(
 class ProbeConnectionError extends Error {
   constructor(
     readonly connected: boolean,
+    readonly retryable: boolean,
     cause: unknown,
   ) {
     super("development probe connection failed", { cause });
   }
+}
+
+async function waitForReady(socketPath: string, port: number, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  let lastError: unknown;
+  while (performance.now() < deadline) {
+    const remainingMs = Math.max(1, Math.round(deadline - performance.now()));
+    try {
+      await waitForHandshake(socketPath, port, Math.min(remainingMs, 1_000));
+      return;
+    } catch (error: unknown) {
+      if (!(error instanceof ProbeConnectionError) || !error.retryable) {
+        throw new CaissonError(
+          "SANDBOX_FAILED",
+          "guest readiness handshake failed",
+          undefined,
+          error,
+        );
+      }
+      lastError = error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new CaissonError(
+    "SANDBOX_FAILED",
+    `guest failed to become ready within ${timeoutMs}ms`,
+    undefined,
+    lastError,
+  );
+}
+
+async function waitForHandshake(
+  socketPath: string,
+  port: number,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const socket = net.createConnection(socketPath);
+    let connected = false;
+    let settled = false;
+    let received = "";
+
+    const fail = (error: ProbeConnectionError): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      reject(error);
+    };
+    const succeed = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      fail(new ProbeConnectionError(connected, true, "guest readiness handshake timed out"));
+    }, timeoutMs);
+
+    socket.setEncoding("utf8");
+    socket.once("connect", () => {
+      connected = true;
+      socket.write(`CONNECT ${port}\n`);
+    });
+    socket.on("data", (chunk: string) => {
+      received += chunk;
+      const newline = received.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      const handshake = received.slice(0, newline);
+      if (!/^OK \d+$/u.test(handshake)) {
+        fail(
+          new ProbeConnectionError(true, false, "Firecracker vsock CONNECT was not acknowledged"),
+        );
+        return;
+      }
+      succeed();
+    });
+    socket.once("error", (error: Error) => {
+      fail(new ProbeConnectionError(connected, true, error));
+    });
+    socket.once("close", () => {
+      if (!settled) {
+        fail(new ProbeConnectionError(connected, true, "guest readiness connection closed"));
+      }
+    });
+  });
 }
 
 async function exchangeOnce(
@@ -142,7 +240,7 @@ async function exchangeOnce(
     };
 
     const timeout = setTimeout(() => {
-      fail(new ProbeConnectionError(connected, "development probe timed out"));
+      fail(new ProbeConnectionError(connected, !handshakeComplete, "development probe timed out"));
     }, timeoutMs);
     socket.setEncoding("utf8");
     socket.once("connect", () => {
@@ -159,7 +257,9 @@ async function exchangeOnce(
         const handshake = received.slice(0, newline);
         received = received.slice(newline + 1);
         if (!/^OK \d+$/u.test(handshake)) {
-          fail(new ProbeConnectionError(true, "Firecracker vsock CONNECT was not acknowledged"));
+          fail(
+            new ProbeConnectionError(true, false, "Firecracker vsock CONNECT was not acknowledged"),
+          );
           return;
         }
         handshakeComplete = true;
@@ -172,11 +272,17 @@ async function exchangeOnce(
       }
     });
     socket.once("error", (error: Error) => {
-      fail(new ProbeConnectionError(connected, error));
+      fail(new ProbeConnectionError(connected, !handshakeComplete, error));
     });
     socket.once("close", () => {
       if (!settled) {
-        fail(new ProbeConnectionError(connected, "development probe connection closed"));
+        fail(
+          new ProbeConnectionError(
+            connected,
+            !handshakeComplete,
+            "development probe connection closed",
+          ),
+        );
       }
     });
   });

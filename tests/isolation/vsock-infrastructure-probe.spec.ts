@@ -31,6 +31,49 @@ async function close(server: net.Server): Promise<void> {
 }
 
 describe("vsock infrastructure probe", () => {
+  it("retries readiness until a delayed guest listener acknowledges CONNECT", async () => {
+    const socketDirectory =
+      process.platform === "win32" ? undefined : await mkdtemp(join(tmpdir(), "caisson-vsock-"));
+    const path =
+      socketDirectory === undefined
+        ? windowsSocketPath()
+        : join(socketDirectory, "delayed-vsock.sock");
+    const server = net.createServer((socket) => {
+      socket.once("data", (chunk: Buffer) => {
+        expect(chunk.toString("utf8")).toBe(`CONNECT ${CAISSON_INFRA_PROBE_PORT}\n`);
+        socket.write("OK 12345\n");
+      });
+    });
+    let listening = false;
+
+    try {
+      const probe = new VsockInfrastructureProbe();
+      const delayedServer = new Promise<void>((resolve, reject) => {
+        setTimeout(() => {
+          listen(server, path)
+            .then(() => {
+              listening = true;
+              resolve();
+            })
+            .catch(reject);
+        }, 50);
+      });
+      await expect(
+        Promise.all([
+          delayedServer,
+          probe.waitForReady({ port: CAISSON_INFRA_PROBE_PORT, vsockPath: path }, 1_000),
+        ]),
+      ).resolves.toHaveLength(2);
+    } finally {
+      if (listening) {
+        await close(server);
+      }
+      if (socketDirectory !== undefined) {
+        await rm(socketDirectory, { force: true, recursive: true });
+      }
+    }
+  });
+
   it("waits for the Firecracker CONNECT acknowledgement before sending JSON", async () => {
     const socketDirectory =
       process.platform === "win32" ? undefined : await mkdtemp(join(tmpdir(), "caisson-vsock-"));
