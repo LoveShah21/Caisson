@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { chmod, mkdir, rm } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 function fail(message) {
   console.error(`FAIL Firecracker manual integration: ${message}`);
@@ -43,13 +44,40 @@ const driver = new FirecrackerDriver({
 });
 
 const spec = { id: randomUUID(), image: "m1-dev-probe" };
+const attachments = new Map();
+const transportHost = {
+  async reserve(descriptor) {
+    const endpointPath = join(
+      process.env.CAISSON_FIRECRACKER_RUNTIME_DIR,
+      "transport",
+      `${randomUUID()}.sock`,
+    );
+    await mkdir(dirname(endpointPath), { mode: 0o700, recursive: true });
+    await chmod(dirname(endpointPath), 0o700);
+    const attachment = { descriptor, endpointPath };
+    attachments.set(descriptor.peerIdentifier, attachment);
+    return attachment;
+  },
+  async release(descriptor) {
+    const attachment = attachments.get(descriptor.peerIdentifier);
+    if (attachment !== undefined) {
+      await rm(attachment.endpointPath, { force: true });
+      attachments.delete(descriptor.peerIdentifier);
+    }
+  },
+};
 const firstRuntimePath = `${process.env.CAISSON_FIRECRACKER_RUNTIME_DIR}/${spec.id}`;
 let first;
+let firstPrepared;
 let restored;
+let restoredPrepared;
 try {
-  console.log("START create: driver will spawn Firecracker and configure the API");
-  first = await driver.create(spec);
-  console.log("PASS create");
+  console.log("START prepare: driver will allocate transport and configure Firecracker");
+  firstPrepared = await driver.prepare(spec, transportHost);
+  first = firstPrepared.handle;
+  console.log("PASS prepare", JSON.stringify(firstPrepared.transport));
+  await driver.start(first);
+  console.log("PASS start");
 
   const firstExec = await driver.exec(first, { argv: ["/bin/echo", "hello"] });
   console.log("PASS exec", JSON.stringify(firstExec));
@@ -60,10 +88,14 @@ try {
   const snapshot = await driver.snapshot(first, "base");
   console.log("PASS snapshot", JSON.stringify(snapshot));
   await driver.destroy(first);
+  await transportHost.release(firstPrepared.transport);
   first = undefined;
+  firstPrepared = undefined;
   console.log("PASS destroy source");
 
-  restored = await driver.restore(snapshot, { ...spec, id: randomUUID() });
+  restoredPrepared = await driver.restore(snapshot, { ...spec, id: randomUUID() }, transportHost);
+  restored = restoredPrepared.handle;
+  await driver.start(restored);
   console.log("PASS restore");
   const restoredExec = await driver.exec(restored, { argv: ["/bin/echo", "hello"] });
   console.log("PASS restored exec", JSON.stringify(restoredExec));
@@ -74,7 +106,9 @@ try {
     );
   }
   await driver.destroy(restored);
+  await transportHost.release(restoredPrepared.transport);
   restored = undefined;
+  restoredPrepared = undefined;
   console.log("PASS destroy restored");
 } catch (error) {
   console.error("FAIL Firecracker manual integration", error);
@@ -83,7 +117,11 @@ try {
   process.exitCode = 1;
 } finally {
   await Promise.all([
-    first === undefined ? Promise.resolve() : driver.destroy(first),
-    restored === undefined ? Promise.resolve() : driver.destroy(restored),
+    first === undefined
+      ? Promise.resolve()
+      : driver.destroy(first).then(() => transportHost.release(firstPrepared.transport)),
+    restored === undefined
+      ? Promise.resolve()
+      : driver.destroy(restored).then(() => transportHost.release(restoredPrepared.transport)),
   ]);
 }

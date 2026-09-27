@@ -6,13 +6,18 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { ContainerDriver } from "../../packages/isolation/src/index.js";
+import { TestTransportHost } from "../helpers/transport-host.js";
 
-const handles: Array<{ driver: ContainerDriver; id: string }> = [];
+const handles: Array<{
+  driver: ContainerDriver;
+  prepared: Awaited<ReturnType<ContainerDriver["prepare"]>>;
+  transportHost: TestTransportHost;
+}> = [];
 
 afterEach(async () => {
   await Promise.all(
-    handles.splice(0).map(async ({ driver, id }) => {
-      await driver.destroy({ id, driver: "container" });
+    handles.splice(0).map(async ({ driver, prepared, transportHost }) => {
+      await transportHost.destroyAndRelease(driver, prepared);
     }),
   );
 });
@@ -20,29 +25,40 @@ afterEach(async () => {
 describe("INV-7: no persistence across sessions", () => {
   it("destroys a session workspace before a new session starts", async () => {
     const driver = new ContainerDriver();
+    const transportHost = new TestTransportHost();
     const marker = `caisson-inv7-${randomUUID()}`;
 
-    const first = await driver.create({
-      id: randomUUID(),
-      image: "alpine:3.23.3",
-    });
-    handles.push({ driver, id: first.id });
+    const firstPrepared = await driver.prepare(
+      {
+        id: randomUUID(),
+        image: "alpine:3.23.3",
+      },
+      transportHost,
+    );
+    await driver.start(firstPrepared.handle);
+    const first = firstPrepared.handle;
+    handles.push({ driver, prepared: firstPrepared, transportHost });
 
     await driver.exec(first, {
       argv: ["/bin/sh", "-c", `printf %s ${marker} > /workspace/marker`],
     });
 
-    await driver.destroy(first);
+    await transportHost.destroyAndRelease(driver, firstPrepared);
     handles.splice(
-      handles.findIndex(({ id }) => id === first.id),
+      handles.findIndex(({ prepared }) => prepared.handle.id === first.id),
       1,
     );
 
-    const second = await driver.create({
-      id: randomUUID(),
-      image: "alpine:3.23.3",
-    });
-    handles.push({ driver, id: second.id });
+    const secondPrepared = await driver.prepare(
+      {
+        id: randomUUID(),
+        image: "alpine:3.23.3",
+      },
+      transportHost,
+    );
+    await driver.start(secondPrepared.handle);
+    const second = secondPrepared.handle;
+    handles.push({ driver, prepared: secondPrepared, transportHost });
 
     const result = await driver.exec(second, {
       argv: ["/bin/sh", "-c", "test ! -e /workspace/marker"],

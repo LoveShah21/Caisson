@@ -150,7 +150,7 @@ interface IsolationDriver {
   start(handle: SandboxHandle): Promise<void>;
   exec(h: SandboxHandle, req: ExecRequest): Promise<ExecResult>;
   snapshot(h: SandboxHandle, kind: 'base' | 'session'): Promise<SnapshotRef>;
-  restore(ref: SnapshotRef, spec: SandboxSpec): Promise<SandboxHandle>;
+  restore(ref: SnapshotRef, spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
   destroy(h: SandboxHandle): Promise<void>;
   capabilities(): DriverCapabilities;   // { hardwareIsolation, snapshotSupport, maxConcurrent }
 }
@@ -166,8 +166,13 @@ interface PreparedSandbox {
 }
 
 interface TransportHost {
-  reserve(descriptor: TransportDescriptor): Promise<void>;  // creates and owns the listener
+  reserve(descriptor: TransportDescriptor): Promise<TransportAttachment>;
   release(descriptor: TransportDescriptor): Promise<void>;  // only after destroy(handle)
+}
+
+interface TransportAttachment {
+  descriptor: TransportDescriptor;  // persisted identity source
+  endpointPath: string;             // runtime-only host path, never persisted
 }
 
 interface TransportDescriptor {
@@ -198,5 +203,16 @@ interface Redactor {
   redact(value: unknown, sessionId: string): { value: unknown; count: number };
 }
 ```
+
+For the container driver, `endpointPath` is the same random absolute Unix-socket
+path as `peerIdentifier`, and `TransportHost` creates the listener. For the
+Firecracker driver, `peerIdentifier` remains the assigned CID while
+`endpointPath` is a separate random private UDS path. Firecracker binds that
+path as trusted host infrastructure; the guest cannot observe or influence it.
+`restore()` reserves a new attachment and loads the snapshot paused. The control
+plane persists its new descriptor before calling `start()` to resume the VM.
+Attachment paths are never persisted. A broker crash terminates sessions on
+that host, so a restarted broker must establish new live transport rather than
+recovering an old endpoint.
 
 `summarise` is on the adapter for a reason: only the adapter knows how to turn its own parameters into a sentence a human can judge.

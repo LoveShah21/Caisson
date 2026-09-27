@@ -50,7 +50,11 @@ async function waitForDatabase(sql: Sql): Promise<void> {
 }
 
 async function applyMigrations(sql: Sql): Promise<void> {
-  for (const migration of ["0001_m0_foundations.sql", "0002_m2_session_identity.sql"]) {
+  for (const migration of [
+    "0001_m0_foundations.sql",
+    "0002_m2_session_identity.sql",
+    "0003_m2_generalize_transport_bindings.sql",
+  ]) {
     const source = await readFile(resolve("packages/db/migrations", migration), "utf8");
     await sql.unsafe(source);
   }

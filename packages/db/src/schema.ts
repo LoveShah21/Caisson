@@ -117,7 +117,8 @@ export const transportBindings = pgTable(
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
     hostId: text("host_id").notNull(),
-    vsockCid: integer("vsock_cid").notNull(),
+    transportKind: text("transport_kind").notNull(),
+    peerIdentifier: text("peer_identifier").notNull(),
     tokenId: uuid("token_id")
       .notNull()
       .references(() => sessionTokens.id),
@@ -126,7 +127,7 @@ export const transportBindings = pgTable(
   },
   (table) => [
     uniqueIndex("transport_bindings_active_peer_uidx")
-      .on(table.hostId, table.vsockCid)
+      .on(table.hostId, table.transportKind, table.peerIdentifier)
       .where(sql`${table.releasedAt} IS NULL`),
   ],
 );

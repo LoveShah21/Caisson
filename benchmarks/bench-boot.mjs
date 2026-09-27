@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -32,6 +33,57 @@ function requiredEnvironment(name) {
   return value;
 }
 
+class BenchmarkTransportHost {
+  #servers = new Map();
+  #attachments = new Map();
+
+  async reserve(descriptor) {
+    const endpointPath =
+      descriptor.kind === "unix"
+        ? descriptor.peerIdentifier
+        : `${os.tmpdir()}/caisson-benchmark-transport/${randomUUID()}.sock`;
+    await mkdir(dirname(endpointPath), { mode: 0o700, recursive: true });
+    await chmod(dirname(endpointPath), 0o700);
+    const attachment = { descriptor, endpointPath };
+    this.#attachments.set(descriptor.peerIdentifier, attachment);
+    if (descriptor.kind !== "unix") return attachment;
+    const server = net.createServer();
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(endpointPath, resolve);
+    });
+    await chmod(endpointPath, 0o600);
+    const stat = await lstat(endpointPath);
+    if (!stat.isSocket() || (stat.mode & 0o077) !== 0) {
+      throw new Error("benchmark transport socket must be owner-only");
+    }
+    this.#servers.set(descriptor.peerIdentifier, server);
+    return attachment;
+  }
+
+  async release(descriptor) {
+    const server = this.#servers.get(descriptor.peerIdentifier);
+    if (server !== undefined) {
+      await new Promise((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+    }
+    await rm(
+      this.#attachments.get(descriptor.peerIdentifier)?.endpointPath ?? descriptor.peerIdentifier,
+      {
+        force: true,
+      },
+    );
+    this.#servers.delete(descriptor.peerIdentifier);
+    this.#attachments.delete(descriptor.peerIdentifier);
+  }
+}
+
+async function destroyAndRelease(driver, prepared, transportHost) {
+  await driver.destroy(prepared.handle);
+  await transportHost.release(prepared.transport);
+}
+
 function createFirecrackerDriver() {
   if (process.env.CAISSON_BENCH_FIRECRACKER !== "1") {
     throw new Error("set CAISSON_BENCH_FIRECRACKER=1 to run the opt-in Firecracker benchmark");
@@ -55,14 +107,17 @@ async function measureCreate(driver, sandboxImage) {
   const durations = [];
   for (let index = 0; index < samples; index += 1) {
     const startedAt = performance.now();
-    const handle = await driver.create({ id: randomUUID(), image: sandboxImage });
+    const transportHost = new BenchmarkTransportHost();
+    const prepared = await driver.prepare({ id: randomUUID(), image: sandboxImage }, transportHost);
+    await driver.start(prepared.handle);
+    const handle = prepared.handle;
     try {
       const result = await driver.exec(handle, { argv: ["/bin/echo", "hello"] });
       if (result.exitCode !== 0 || result.stdout !== "hello\n") {
         throw new Error("driver exec did not return the expected echo output");
       }
     } finally {
-      await driver.destroy(handle);
+      await destroyAndRelease(driver, prepared, transportHost);
     }
     durations.push(Math.round(performance.now() - startedAt));
   }
@@ -73,14 +128,21 @@ async function measureRestore(driver, snapshot) {
   const durations = [];
   for (let index = 0; index < samples; index += 1) {
     const startedAt = performance.now();
-    const handle = await driver.restore(snapshot, { id: randomUUID(), image: "m1-dev-probe" });
+    const transportHost = new BenchmarkTransportHost();
+    const prepared = await driver.restore(
+      snapshot,
+      { id: randomUUID(), image: "m1-dev-probe" },
+      transportHost,
+    );
+    await driver.start(prepared.handle);
+    const handle = prepared.handle;
     try {
       const result = await driver.exec(handle, { argv: ["/bin/echo", "hello"] });
       if (result.exitCode !== 0 || result.stdout !== "hello\n") {
         throw new Error("restored driver exec did not return the expected echo output");
       }
     } finally {
-      await driver.destroy(handle);
+      await destroyAndRelease(driver, prepared, transportHost);
     }
     durations.push(Math.round(performance.now() - startedAt));
   }
@@ -127,7 +189,8 @@ if (driverName === "container") {
     kind: "cold",
     image,
     samples,
-    execution: "create, infrastructure exec(/bin/echo hello), destroy",
+    timingModel: "prepare_start_exec_destroy",
+    execution: "prepare, start, infrastructure exec(/bin/echo hello), destroy",
     p50Ms: percentile(durations, 0.5),
     p99Ms: percentile(durations, 0.99),
     samplesMs: durations,
@@ -141,7 +204,8 @@ if (driverName === "container") {
     kind: "cold",
     source: "local kernel and rootfs; S3 snapshot retrieval is scheduled for M-2",
     samples,
-    execution: "create, infrastructure exec(/bin/echo hello), destroy",
+    timingModel: "prepare_start_exec_destroy",
+    execution: "prepare, start, infrastructure exec(/bin/echo hello), destroy",
     p50Ms: percentile(coldDurations, 0.5),
     p99Ms: percentile(coldDurations, 0.99),
     samplesMs: coldDurations,
@@ -149,13 +213,21 @@ if (driverName === "container") {
   });
 
   let source;
+  let sourcePrepared;
+  let sourceTransportHost;
   let snapshot;
   try {
-    source = await driver.create({ id: randomUUID(), image: "m1-dev-probe" });
+    sourceTransportHost = new BenchmarkTransportHost();
+    sourcePrepared = await driver.prepare(
+      { id: randomUUID(), image: "m1-dev-probe" },
+      sourceTransportHost,
+    );
+    await driver.start(sourcePrepared.handle);
+    source = sourcePrepared.handle;
     snapshot = await driver.snapshot(source, "base");
   } finally {
-    if (source !== undefined) {
-      await driver.destroy(source);
+    if (sourcePrepared !== undefined && sourceTransportHost !== undefined) {
+      await destroyAndRelease(driver, sourcePrepared, sourceTransportHost);
     }
   }
 
@@ -166,6 +238,7 @@ if (driverName === "container") {
       kind: "warm",
       source: "local base snapshot",
       samples,
+      timingModel: "restore_exec_destroy",
       execution: "restore, infrastructure exec(/bin/echo hello), destroy",
       p50Ms: percentile(warmDurations, 0.5),
       p99Ms: percentile(warmDurations, 0.99),
@@ -189,5 +262,7 @@ await writeFile(
   new URL("machine.md", outputDirectory),
   `${Object.entries(machine)
     .map(([key, value]) => `- ${key}: ${value}`)
-    .join("\n")}\n`,
+    .join(
+      "\n",
+    )}\n\nMeasurements with timingModel prepare_start_exec_destroy supersede the pre-ADR-18 create_exec_destroy results. The lifecycle boundary changed, so the two result sets are not comparable.\n`,
 );

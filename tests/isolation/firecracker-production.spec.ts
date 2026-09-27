@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { FirecrackerDriver } from "../../packages/isolation/src/index.js";
 
+const transportHost = {
+  reserve: async (descriptor: { readonly peerIdentifier: string }) => ({
+    descriptor,
+    endpointPath: descriptor.peerIdentifier,
+  }),
+  release: async () => undefined,
+};
+
 describe("Firecracker M-1 development probe boundary", () => {
   it("refuses the development probe rootfs in production before host checks", async () => {
     const previous = process.env.CAISSON_ENV;
@@ -15,9 +23,9 @@ describe("Firecracker M-1 development probe boundary", () => {
     });
 
     try {
-      await expect(driver.create({ id: "probe-refusal", image: "m1-dev-probe" })).rejects.toThrow(
-        "production refuses the M-1 development probe rootfs",
-      );
+      await expect(
+        driver.prepare({ id: "probe-refusal", image: "m1-dev-probe" }, transportHost),
+      ).rejects.toThrow("production refuses the M-1 development probe rootfs");
     } finally {
       if (previous === undefined) {
         delete process.env.CAISSON_ENV;

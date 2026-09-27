@@ -81,12 +81,13 @@ describe("INV-5: session tokens are opaque, scoped, and expiring", () => {
       sessionId: expiredSessionId,
       tokenId: expired.id,
       hostId: "host-expired",
-      vsockCid: 43,
+      transportKind: "vsock",
+      peerIdentifier: "43",
     });
 
     await expect(
       identities.resolve(
-        { hostId: "host-expired", vsockCid: 43 },
+        { hostId: "host-expired", transportKind: "vsock", peerIdentifier: "43" },
         new Date("2026-02-01T00:00:00Z"),
       ),
     ).rejects.toMatchObject({ code: "SESSION_EXPIRED" });
@@ -100,12 +101,17 @@ describe("INV-5: session tokens are opaque, scoped, and expiring", () => {
       sessionId: revokedSessionId,
       tokenId: revoked.id,
       hostId: "host-revoked",
-      vsockCid: 44,
+      transportKind: "unix",
+      peerIdentifier: "session-socket",
     });
     await tokens.revoke(revoked.id, "terminated");
 
     await expect(
-      identities.resolve({ hostId: "host-revoked", vsockCid: 44 }),
+      identities.resolve({
+        hostId: "host-revoked",
+        transportKind: "unix",
+        peerIdentifier: "session-socket",
+      }),
     ).rejects.toMatchObject({
       code: "SESSION_EXPIRED",
     });

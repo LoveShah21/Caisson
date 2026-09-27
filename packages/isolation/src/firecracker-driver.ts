@@ -15,9 +15,12 @@ import type {
   ExecRequest,
   ExecResult,
   IsolationDriver,
+  PreparedSandbox,
   SandboxHandle,
   SandboxSpec,
   SnapshotRef,
+  TransportDescriptor,
+  TransportHost,
 } from "./types.js";
 import { CAISSON_INFRA_PROBE_PORT } from "./vsock-infrastructure-probe.js";
 
@@ -46,6 +49,7 @@ export interface FirecrackerDriverOptions {
   readonly runtimeDirectory: string;
   readonly snapshotDirectory: string;
   readonly guestCidStart?: number;
+  readonly hostId?: string;
   readonly vcpuCount?: number;
   readonly memoryMiB?: number;
   readonly maxConcurrent?: number;
@@ -59,6 +63,9 @@ interface FirecrackerRecord {
   readonly process: ChildProcess;
   readonly runtimePath: string;
   readonly vsockPath: string;
+  readonly guestCid: number;
+  readonly transport: TransportDescriptor;
+  readonly restored: boolean;
 }
 
 export function firecrackerProcessSpawnOptions(logFileDescriptor: number): SpawnOptions {
@@ -77,16 +84,21 @@ export class FirecrackerDriver implements IsolationDriver {
   readonly #options: Required<Omit<FirecrackerDriverOptions, "infrastructureProbe">> &
     Pick<FirecrackerDriverOptions, "infrastructureProbe">;
   readonly #records = new Map<string, FirecrackerRecord>();
+  readonly #releasedGuestCids = new Set<number>();
+  readonly #allocatedGuestCids = new Map<string, number>();
+  #nextGuestCid: number;
 
   constructor(options: FirecrackerDriverOptions) {
     this.#options = {
       ...options,
       guestCidStart: options.guestCidStart ?? 10_000,
+      hostId: options.hostId ?? "local",
       vcpuCount: options.vcpuCount ?? 1,
       memoryMiB: options.memoryMiB ?? 512,
       maxConcurrent: options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT,
       bootArgs: options.bootArgs ?? DEFAULT_BOOT_ARGS,
     };
+    this.#nextGuestCid = this.#options.guestCidStart;
   }
 
   capabilities(): DriverCapabilities {
@@ -97,15 +109,30 @@ export class FirecrackerDriver implements IsolationDriver {
     };
   }
 
-  async create(spec: SandboxSpec): Promise<SandboxHandle> {
+  async prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox> {
     this.#assertProductionRootfs();
     await this.#assertHostRequirements();
     if (this.#records.size >= this.#options.maxConcurrent) {
       throw new CaissonError("SANDBOX_FAILED", "Firecracker driver concurrency limit reached");
     }
 
-    const record = await this.#startProcess(spec.id);
+    const guestCid = this.#allocateGuestCid(spec.id);
+    const transport: TransportDescriptor = {
+      kind: "vsock",
+      hostId: this.#options.hostId,
+      peerIdentifier: String(guestCid),
+    };
+    const attachment = await transportHost.reserve(transport);
+    if (
+      attachment.descriptor.kind !== transport.kind ||
+      attachment.descriptor.hostId !== transport.hostId ||
+      attachment.descriptor.peerIdentifier !== transport.peerIdentifier
+    ) {
+      throw new CaissonError("SANDBOX_FAILED", "Firecracker transport attachment is invalid");
+    }
+    let record: FirecrackerRecord | undefined;
     try {
+      record = await this.#startProcess(spec.id, guestCid, transport, attachment.endpointPath);
       await this.#callApi(record, "PUT", "/machine-config", {
         vcpu_count: this.#options.vcpuCount,
         mem_size_mib: this.#options.memoryMiB,
@@ -122,19 +149,31 @@ export class FirecrackerDriver implements IsolationDriver {
         firecrackerRootfsDriveConfig(this.#options.rootfsPath),
       );
       await this.#callApi(record, "PUT", "/vsock", {
-        guest_cid: this.#guestCidFor(spec.id),
+        guest_cid: guestCid,
         uds_path: record.vsockPath,
       });
-      await this.#callApi(record, "PUT", "/actions", {
-        action_type: "InstanceStart",
-      });
-      await this.#waitForGuestReady(record);
       this.#records.set(spec.id, record);
-      return { id: spec.id, driver: "firecracker" };
+      return { handle: { id: spec.id, driver: "firecracker" }, transport };
     } catch (error: unknown) {
-      await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
+      if (record !== undefined) {
+        this.#records.set(spec.id, record);
+        await this.destroy({ id: spec.id, driver: "firecracker" });
+      } else {
+        this.#releaseGuestCid(spec.id);
+      }
+      await transportHost.release(transport);
       throw error;
     }
+  }
+
+  async start(handle: SandboxHandle): Promise<void> {
+    const record = this.#getRecord(handle);
+    if (record.restored) {
+      await this.#callApi(record, "PATCH", "/vm", { state: "Resumed" });
+    } else {
+      await this.#callApi(record, "PUT", "/actions", { action_type: "InstanceStart" });
+    }
+    await this.#waitForGuestReady(record);
   }
 
   async exec(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult> {
@@ -186,22 +225,49 @@ export class FirecrackerDriver implements IsolationDriver {
     };
   }
 
-  async restore(ref: SnapshotRef, spec: SandboxSpec): Promise<SandboxHandle> {
+  async restore(
+    ref: SnapshotRef,
+    spec: SandboxSpec,
+    transportHost: TransportHost,
+  ): Promise<PreparedSandbox> {
     this.#assertProductionRootfs();
     await this.#assertHostRequirements();
-    const record = await this.#startProcess(spec.id);
+    const guestCid = this.#allocateGuestCid(spec.id);
+    const transport: TransportDescriptor = {
+      kind: "vsock",
+      hostId: this.#options.hostId,
+      peerIdentifier: String(guestCid),
+    };
+    const attachment = await transportHost.reserve(transport);
+    if (
+      attachment.descriptor.kind !== transport.kind ||
+      attachment.descriptor.hostId !== transport.hostId ||
+      attachment.descriptor.peerIdentifier !== transport.peerIdentifier
+    ) {
+      throw new CaissonError("SANDBOX_FAILED", "Firecracker transport attachment is invalid");
+    }
+    let record: FirecrackerRecord | undefined;
     try {
+      record = {
+        ...(await this.#startProcess(spec.id, guestCid, transport, attachment.endpointPath)),
+        restored: true,
+      };
       await this.#callApi(record, "PUT", "/snapshot/load", {
         snapshot_path: ref.statePath,
         mem_file_path: ref.memoryPath,
-        resume_vm: true,
+        resume_vm: false,
         vsock_override: { uds_path: record.vsockPath },
       });
-      await this.#waitForGuestReady(record);
       this.#records.set(spec.id, record);
-      return { id: spec.id, driver: "firecracker" };
+      return { handle: { id: spec.id, driver: "firecracker" }, transport };
     } catch (error: unknown) {
-      await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
+      if (record !== undefined) {
+        this.#records.set(spec.id, record);
+        await this.destroy({ id: spec.id, driver: "firecracker" });
+      } else {
+        this.#releaseGuestCid(spec.id);
+      }
+      await transportHost.release(transport);
       throw error;
     }
   }
@@ -210,6 +276,7 @@ export class FirecrackerDriver implements IsolationDriver {
     const record = this.#getRecord(handle);
     this.#records.delete(handle.id);
     await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
+    this.#releaseGuestCid(handle.id);
   }
 
   async #assertHostRequirements(): Promise<void> {
@@ -244,10 +311,14 @@ export class FirecrackerDriver implements IsolationDriver {
     }
   }
 
-  async #startProcess(sessionId: string): Promise<FirecrackerRecord> {
+  async #startProcess(
+    sessionId: string,
+    guestCid: number,
+    transport: TransportDescriptor,
+    vsockPath: string,
+  ): Promise<FirecrackerRecord> {
     const runtimePath = join(this.#options.runtimeDirectory, this.#safePathSegment(sessionId));
     const apiSocketPath = join(runtimePath, "firecracker.sock");
-    const vsockPath = join(runtimePath, "vsock.sock");
     const logPath = join(runtimePath, "firecracker.log");
     await mkdir(runtimePath, { recursive: true });
     const logFile = await open(logPath, "a");
@@ -269,7 +340,16 @@ export class FirecrackerDriver implements IsolationDriver {
     this.#diagnostic("waiting for Firecracker API socket");
     await this.#waitForApiSocket(process, apiSocketPath, () => spawnError);
     this.#diagnostic("Firecracker API socket is ready");
-    return { apiSocketPath, logPath, process, runtimePath, vsockPath };
+    return {
+      apiSocketPath,
+      logPath,
+      process,
+      runtimePath,
+      vsockPath,
+      guestCid,
+      transport,
+      restored: false,
+    };
   }
 
   async #stopProcess(record: FirecrackerRecord, preserveRuntime = false): Promise<void> {
@@ -361,12 +441,25 @@ export class FirecrackerDriver implements IsolationDriver {
     return record;
   }
 
-  #guestCidFor(sessionId: string): number {
-    let sum = 0;
-    for (const character of sessionId) {
-      sum = (sum + character.charCodeAt(0)) % 50_000;
+  #allocateGuestCid(sessionId: string): number {
+    const reusable = [...this.#releasedGuestCids].sort((left, right) => left - right)[0];
+    const guestCid = reusable ?? this.#nextGuestCid++;
+    if (reusable !== undefined) {
+      this.#releasedGuestCids.delete(reusable);
     }
-    return this.#options.guestCidStart + sum;
+    if ([...this.#allocatedGuestCids.values()].includes(guestCid)) {
+      throw new CaissonError("SANDBOX_FAILED", "Firecracker guest CID allocation collision");
+    }
+    this.#allocatedGuestCids.set(sessionId, guestCid);
+    return guestCid;
+  }
+
+  #releaseGuestCid(sessionId: string): void {
+    const guestCid = this.#allocatedGuestCids.get(sessionId);
+    if (guestCid !== undefined) {
+      this.#allocatedGuestCids.delete(sessionId);
+      this.#releasedGuestCids.add(guestCid);
+    }
   }
 
   #safePathSegment(value: string): string {

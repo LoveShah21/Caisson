@@ -57,7 +57,8 @@ describe("INV-3: policy identity is resolved outside the guest", () => {
       sessionId: "018f0000-0000-7000-8000-000000000002",
       tokenId: token.id,
       hostId: "host-a",
-      vsockCid: 42,
+      transportKind: "vsock",
+      peerIdentifier: "42",
     });
   }, 30_000);
 
@@ -88,7 +89,11 @@ describe("INV-3: policy identity is resolved outside the guest", () => {
   });
 
   it("uses the host-established connection binding as the sole identity source", async () => {
-    const identity = await identities.resolve({ hostId: "host-a", vsockCid: 42 });
+    const identity = await identities.resolve({
+      hostId: "host-a",
+      transportKind: "vsock",
+      peerIdentifier: "42",
+    });
 
     expect(identity.sessionId).toBe("018f0000-0000-7000-8000-000000000002");
     expect(identity.scopes).toEqual(["warehouse.readonly"]);

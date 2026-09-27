@@ -221,11 +221,11 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 ---
 
-## ADR-19: The broker owns host-side transport listeners
+## ADR-19: The broker owns host-side transport lifecycle
 **Status:** accepted
 
 **Alternatives:** Let each isolation driver create and accept its own host-side listener; release the listener before sandbox destruction.
 
-**Reasoning:** B1 terminates at the host-side broker. A driver-owned listener would create a second hidden host boundary and leave the broker unable to own the connection lifecycle. `transportHost.reserve()` creates and owns the Firecracker vsock-side or container Unix-socket listener. Drivers only attach their sandbox-specific side to that endpoint. Destroying a listener while its sandbox remains live risks a connection being misclassified or dropped during teardown.
+**Reasoning:** B1 terminates at the host-side broker. A driver-owned connection lifecycle would create a second hidden host boundary and leave the broker unable to own identity allocation or teardown. The two drivers differ at the operating-system boundary. For a container, `transportHost.reserve()` directly creates and owns the owner-only Unix-socket listener. For Firecracker, `transportHost.reserve()` allocates the CID and random private UDS path and owns the connection lifecycle, but the trusted host-side Firecracker process performs the required `bind()` when configured with `uds_path`. The guest cannot reach, influence, or observe that path. Destroying an attachment while its sandbox remains live risks a connection being misclassified or dropped during teardown.
 
-**Consequences:** `prepare(spec, transportHost)` invokes the broker-owned reservation before guest execution is possible. `destroy(handle)` always completes before `transportHost.release(descriptor)` is called. Driver code must never call `listen()` or `accept()` for guest broker transport.
+**Consequences:** `reserve()` returns a runtime-only host attachment. For container transport, `peerIdentifier` and the attachment endpoint are the same random absolute Unix-socket path beneath a mode-0700 host directory and the driver bind-mounts only that socket. For Firecracker, `peerIdentifier` remains the persisted CID while the attachment supplies a separate random private UDS path. Attachment paths are never persisted. `restore()` reserves a new attachment and leaves the VM paused until the replacement binding is persisted and `start()` resumes it. A broker crash terminates sessions on that host, so endpoint recovery across a broker restart is neither supported nor attempted. `destroy(handle)` always completes before `transportHost.release(descriptor)` is called. Driver code must never call `listen()` or `accept()` for guest broker transport.

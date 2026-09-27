@@ -8,6 +8,7 @@ import {
   FirecrackerDriver,
   VsockInfrastructureProbe,
 } from "../../packages/isolation/src/index.js";
+import { TestTransportHost } from "../helpers/transport-host.js";
 
 const FIRECRACKER_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init";
 const manualFirecracker = process.env.CAISSON_MANUAL_FC_TEST === "1";
@@ -23,7 +24,13 @@ function requiredEnvironment(name: string): string {
 describe("M-1 driver mechanism", () => {
   it("runs echo through ContainerDriver and destroys the sandbox", async () => {
     const driver = new ContainerDriver({ warn: () => undefined });
-    const handle = await driver.create({ id: randomUUID(), image: "alpine:3.23.3" });
+    const transportHost = new TestTransportHost();
+    const prepared = await driver.prepare(
+      { id: randomUUID(), image: "alpine:3.23.3" },
+      transportHost,
+    );
+    await driver.start(prepared.handle);
+    const handle = prepared.handle;
     try {
       await expect(driver.exec(handle, { argv: ["/bin/echo", "hello"] })).resolves.toMatchObject({
         exitCode: 0,
@@ -31,7 +38,7 @@ describe("M-1 driver mechanism", () => {
         stdout: "hello\n",
       });
     } finally {
-      await driver.destroy(handle);
+      await transportHost.destroyAndRelease(driver, prepared);
     }
   }, 60_000);
 
@@ -49,7 +56,13 @@ describe("M-1 driver mechanism", () => {
         bootArgs: FIRECRACKER_BOOT_ARGS,
         infrastructureProbe: new VsockInfrastructureProbe(),
       });
-      const handle = await driver.create({ id: randomUUID(), image: "m1-dev-probe" });
+      const transportHost = new TestTransportHost();
+      const prepared = await driver.prepare(
+        { id: randomUUID(), image: "m1-dev-probe" },
+        transportHost,
+      );
+      await driver.start(prepared.handle);
+      const handle = prepared.handle;
       try {
         await expect(driver.exec(handle, { argv: ["/bin/echo", "hello"] })).resolves.toMatchObject({
           exitCode: 0,
@@ -57,7 +70,7 @@ describe("M-1 driver mechanism", () => {
           stdout: "hello\n",
         });
       } finally {
-        await driver.destroy(handle);
+        await transportHost.destroyAndRelease(driver, prepared);
       }
     },
     60_000,

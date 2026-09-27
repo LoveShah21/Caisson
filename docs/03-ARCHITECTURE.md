@@ -76,7 +76,7 @@ Next.js. Subscribes to the websocket hub, renders pending requests in human-read
 
 ## 4. Request path for a brokered action
 
-1. Control plane calls `prepare()`. The driver allocates a host-only descriptor and asks the broker-owned `transportHost` to reserve the listener; drivers attach to that listener but never call `listen()` or `accept()` themselves. The control plane persists the returned descriptor as a transport binding, then calls `start()`. A persistence failure destroys the prepared sandbox before `transportHost.release()` removes its listener.
+1. Control plane calls `prepare()`. The driver allocates a host-only descriptor and asks the broker-owned `transportHost` for a runtime attachment. The container attachment is an owner-only Unix listener created by the broker. The Firecracker attachment is a random private UDS path reserved by the broker and bound by the trusted Firecracker process. The control plane persists the descriptor, never the attachment path, then calls `start()`. A persistence failure destroys the prepared sandbox before `transportHost.release()` removes the attachment. Snapshot restore follows the same prepare, persist, start order with a new attachment.
 2. Agent calls the `broker` tool.
 3. Runtime writes a framed request to vsock or the container's mounted Unix socket.
 4. Broker resolves the session from the connection binding. Not from the payload.

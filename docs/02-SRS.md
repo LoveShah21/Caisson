@@ -30,7 +30,7 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 
 ### 3.2 Isolation
 
-- **FR-8** Isolation must sit behind an `IsolationDriver` interface with `create`, `exec`, `snapshot`, `restore`, `destroy`, and `capabilities`.
+- **FR-8** Isolation must sit behind an `IsolationDriver` interface with `prepare`, `start`, `exec`, `snapshot`, `restore`, `destroy`, and `capabilities`. Both cold boot and snapshot restore must reserve a host transport attachment and return a prepared sandbox before guest execution begins.
 - **FR-9** A Firecracker driver must be provided and must be the default when `/dev/kvm` is present and writable.
 - **FR-10** A container driver must be provided for development and CI. It must emit a startup warning, must report `hardwareIsolation: false` from `capabilities()`, and must never be selected silently when the Firecracker driver is available.
 - **FR-11** The system must refuse to start in production mode (`CAISSON_ENV=production`) with a driver reporting `hardwareIsolation: false`.

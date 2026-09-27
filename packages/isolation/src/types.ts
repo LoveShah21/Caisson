@@ -12,6 +12,34 @@ export interface SandboxHandle {
   readonly driver: IsolationDriverName;
 }
 
+export interface TransportDescriptor {
+  readonly kind: "vsock" | "unix";
+  readonly hostId: string;
+  readonly peerIdentifier: string;
+}
+
+/** Runtime-only endpoint supplied by the host that owns the transport lifecycle. */
+export interface TransportAttachment {
+  readonly descriptor: TransportDescriptor;
+  readonly endpointPath: string;
+}
+
+export interface TransportHost {
+  /**
+   * Reserves the descriptor and returns its runtime endpoint. For a container,
+   * this creates the Unix listener. For Firecracker, it reserves the private
+   * UDS namespace that the trusted Firecracker process will bind.
+   */
+  reserve(descriptor: TransportDescriptor): Promise<TransportAttachment>;
+  /** Called only after the sandbox using this descriptor has been destroyed. */
+  release(descriptor: TransportDescriptor): Promise<void>;
+}
+
+export interface PreparedSandbox {
+  readonly handle: SandboxHandle;
+  readonly transport: TransportDescriptor;
+}
+
 export interface ExecRequest {
   readonly argv: readonly string[];
   readonly cwd?: string;
@@ -35,10 +63,15 @@ export interface SnapshotRef {
 }
 
 export interface IsolationDriver {
-  create(spec: SandboxSpec): Promise<SandboxHandle>;
+  prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
+  start(handle: SandboxHandle): Promise<void>;
   exec(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult>;
   snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<SnapshotRef>;
-  restore(ref: SnapshotRef, spec: SandboxSpec): Promise<SandboxHandle>;
+  restore(
+    ref: SnapshotRef,
+    spec: SandboxSpec,
+    transportHost: TransportHost,
+  ): Promise<PreparedSandbox>;
   destroy(handle: SandboxHandle): Promise<void>;
   capabilities(): DriverCapabilities;
 }

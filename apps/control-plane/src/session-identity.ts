@@ -18,12 +18,14 @@ export interface TransportBinding {
   readonly sessionId: string;
   readonly tokenId: string;
   readonly hostId: string;
-  readonly vsockCid: number;
+  readonly transportKind: "vsock" | "unix";
+  readonly peerIdentifier: string;
 }
 
 export interface TransportPeer {
   readonly hostId: string;
-  readonly vsockCid: number;
+  readonly transportKind: "vsock" | "unix";
+  readonly peerIdentifier: string;
 }
 
 export interface BoundSessionIdentity {
@@ -86,12 +88,13 @@ export class SessionIdentityResolver {
 
   async bind(binding: TransportBinding): Promise<void> {
     await this.#sql`
-      INSERT INTO transport_bindings (id, session_id, host_id, vsock_cid, token_id)
+      INSERT INTO transport_bindings (id, session_id, host_id, transport_kind, peer_identifier, token_id)
       VALUES (
         ${uuidV7()},
         ${binding.sessionId},
         ${binding.hostId},
-        ${binding.vsockCid},
+        ${binding.transportKind},
+        ${binding.peerIdentifier},
         ${binding.tokenId}
       )
     `;
@@ -101,7 +104,10 @@ export class SessionIdentityResolver {
     await this.#sql`
       UPDATE transport_bindings
       SET released_at = now()
-      WHERE host_id = ${peer.hostId} AND vsock_cid = ${peer.vsockCid} AND released_at IS NULL
+      WHERE host_id = ${peer.hostId}
+        AND transport_kind = ${peer.transportKind}
+        AND peer_identifier = ${peer.peerIdentifier}
+        AND released_at IS NULL
     `;
   }
 
@@ -122,7 +128,8 @@ export class SessionIdentityResolver {
       JOIN session_tokens AS token ON token.id = binding.token_id
       JOIN sessions AS session ON session.id = binding.session_id
       WHERE binding.host_id = ${peer.hostId}
-        AND binding.vsock_cid = ${peer.vsockCid}
+        AND binding.transport_kind = ${peer.transportKind}
+        AND binding.peer_identifier = ${peer.peerIdentifier}
         AND binding.released_at IS NULL
     `;
 
