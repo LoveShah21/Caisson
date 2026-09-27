@@ -83,6 +83,7 @@ State these in the README. Omitting them is the failure mode this project exists
 5. **Approval fatigue is real.** A system that asks too often trains people to click approve. The `approval_wait_seconds` and approval-rate metrics exist partly to make this visible.
 6. **The broker is a single point of trust.** It is deliberately small so it can be read in full, but a bug there is a bug everywhere.
 7. **Firecracker escape is out of scope.** Caisson inherits Firecracker's security posture and does not improve on it.
+8. **`requestedBy` is not verified in v1.** It is a self-reported audit-trail label until an authentication layer exists, not an identity or access-control signal.
 
 ## 6. Prompt injection: the defining test
 

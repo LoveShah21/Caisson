@@ -185,3 +185,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** M-1 establishes the isolation-driver boundary and verifies both drivers. Session endpoints, token binding, lifecycle orchestration, snapshot scheduling and storage require the M-2 control-plane and broker work. The blocked-egress monitor requires the M-4 interception work. Assigning those requirements to the milestones that provide their dependencies keeps the roadmap and acceptance gates consistent.
 
 **Consequences:** M-1 covers FR-8 through FR-12 only. M-2 additionally covers FR-1 through FR-7 and FR-13 through FR-17. M-4 additionally covers FR-62. The M-1 tag is recreated only after its corrected gate is complete.
+
+---
+
+## ADR-16: Move broker prerequisites into M-2
+**Status:** accepted
+
+**Alternatives:** Build the broker against a placeholder policy decision and defer all audit writing until M-5; leave core policy and its simulator in M-3.
+
+**Reasoning:** FR-22 requires policy evaluation before a credential is fetched, and FR-23 and FR-26 require durable audit handling around execution. A broker cannot truthfully satisfy its M-2 requirements without these controls. M-2 therefore includes the in-process wasm evaluator, bundle loading, default-deny and scope checks, the `redact_pii` and `role:<name>` obligations, `POST /v1/policy/simulate`, the minimum ClickHouse actions writer, and the durable completion buffer. The security-sensitive SQL parsing and evasion resistance remain in M-3 with the agent runtime. Approval-mode policy remains in M-4 with approvals.
+
+**Consequences:** M-2 expands to FR-33 through FR-36 and FR-39a, plus the minimum audit infrastructure required by FR-23 and FR-26. M-3 retains SQL parsing, Rego test gating, runtime-facing policy, and the seven-tool runtime. M-5 completes audit coverage, queries, views, dashboards, and alerts. The M-2 bootstrap creates a default policy bundle and records its id in `settings.active_policy_bundle`, so every session has a valid immutable policy reference.

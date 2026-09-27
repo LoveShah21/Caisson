@@ -193,6 +193,12 @@ CREATE TABLE settings (
 ```
 Holds `active_base_snapshot`, `active_policy_bundle`, `interceptor_allowlist`, and similar.
 
+M-2 bootstrap inserts a minimal default policy bundle and sets
+`active_policy_bundle` to its id in the same migration transaction. A session
+creation request may specify `policyBundleId`; otherwise the control plane uses
+this setting. Bootstrap failure prevents session creation rather than creating a
+session without a policy bundle.
+
 ### 1.9 Entity relationships
 
 ```

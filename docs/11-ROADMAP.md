@@ -20,7 +20,7 @@ FR-8 to FR-12. `IsolationDriver`, both implementations, driver-level snapshot bu
 
 ## M-2. Broker and credential brokering (weeks 3 to 4)
 
-FR-1 to FR-7, FR-13 to FR-17, FR-18 to FR-28, FR-30 to FR-32, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, snapshot scheduling and storage, vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, and the error taxonomy. The github and slack portion of FR-29 is scheduled in M-4.
+FR-1 to FR-7, FR-13 to FR-17, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, snapshot scheduling and storage, vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
@@ -30,7 +30,7 @@ FR-1 to FR-7, FR-13 to FR-17, FR-18 to FR-28, FR-30 to FR-32, and the postgres, 
 
 ## M-3. Policy and agent runtime (week 5)
 
-FR-33 to FR-45. OPA wasm evaluator, bundle storage and activation with test gating, obligations, SQL parsing in the broker, the seven-tool runtime, skills loader, structured denials.
+FR-37, FR-39 to FR-45, and the remaining non-approval policy work. SQL parsing and adversarial hardening in the broker, Rego test gating, the seven-tool runtime-facing policy surface, skills loader, and structured denials. Approval-mode policy behaviour remains in M-4.
 
 **Gate:**
 - `opa test policies/` passes in CI.
@@ -52,7 +52,7 @@ FR-46 to FR-54, FR-59 to FR-62, and the github and slack portion of FR-29. Webso
 
 ## M-5. Audit, observability, documentation (week 8)
 
-FR-55 to FR-58, all of `10-OBSERVABILITY.md`. ClickHouse schema and writers, the three canned queries, materialised views, Grafana dashboards provisioned as code, alerts, README, threat model published, demo recording.
+The remaining FR-55 to FR-58 work and all of `10-OBSERVABILITY.md`. M-2 supplies the minimum broker `actions` writer and durable completion buffer; M-5 completes full seven-operation coverage, replay and service/denial queries, materialised views, Grafana dashboards provisioned as code, alerts, README, threat model published, and demo recording.
 
 **Gate:**
 - INV-4 passes including the fault-injection case.

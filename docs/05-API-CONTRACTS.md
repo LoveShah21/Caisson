@@ -26,10 +26,12 @@ Three surfaces: the operator REST API, the approval websocket, and the guest-to-
   "agent": { "image": "base-v3", "entrypoint": "default" },
   "scopes": ["warehouse.readonly", "github.repo.read"],
   "approvalMode": "rule",
+  "policyBundleId": "018f...",
   "ttlSeconds": 1800,
   "idleTimeoutSeconds": 300,
+  "requestedBy": "love@example.com",
   "purpose": "Investigate the spike in failed checkouts since 09:00",
-  "metadata": { "requestedBy": "love@example.com", "ticket": "INC-2291" }
+  "metadata": { "ticket": "INC-2291" }
 }
 ```
 201:
@@ -44,6 +46,12 @@ Three surfaces: the operator REST API, the approval websocket, and the guest-to-
 }
 ```
 No token in the response. Ever. FR-3.
+
+`policyBundleId` is optional. When omitted, the control plane reads
+`settings.active_policy_bundle`; bootstrap creates the initial active bundle
+before sessions can be created. `requestedBy` is required for audit labelling,
+but is self-reported in v1 and is not an authentication or access-control
+signal.
 
 ### GET /v1/sessions/:id
 Returns status, timings, scopes, driver, `hardwareIsolated`, counts by decision, pending approvals.
