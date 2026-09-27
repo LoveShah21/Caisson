@@ -152,3 +152,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** <why>
 **Consequences:** <what this costs, including the bad parts>
 ```
+
+---
+
+## ADR-13: M-1 readiness requires a completed probe command
+**Status:** accepted
+
+**Alternatives:** Treat Firecracker's `CONNECT` acknowledgement as guest readiness.
+
+**Reasoning:** The vsock multiplexer can acknowledge a host stream before the temporary guest probe is ready to read it. Completing a harmless `/bin/echo` request and response proves the probe accept loop, request parsing, command execution, and response path are usable.
+
+**Consequences:** M-1 boot readiness includes one guest command round trip and is therefore slower than a transport-only handshake. This remains infrastructure-only development scaffolding from ADR-12, not an agent capability or INV-8 test.

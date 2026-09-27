@@ -48,7 +48,9 @@ func main() {
 		if err != nil {
 			continue
 		}
-		handle(connection)
+		// A closed or slow host probe must not prevent the listener from
+		// accepting the next connection.
+		go handle(connection)
 	}
 }
 
