@@ -47,7 +47,7 @@ func main() {
 	fmt.Fprintln(os.Stderr, "m1 development probe: listener bound")
 
 	for {
-		connection, _, err := syscall.Accept(listener)
+		connection, err := accept(listener)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "m1 development probe: accept error: %v\n", err)
 			time.Sleep(acceptErrorBackoff)
@@ -58,6 +58,17 @@ func main() {
 		// accepting the next connection.
 		go handle(connection)
 	}
+}
+
+// syscall.Accept converts the accepted peer address through Go's Sockaddr
+// support, which does not recognize AF_VSOCK. The probe does not need the
+// peer address, so accept the descriptor directly and leave it uninterpreted.
+func accept(listener int) (int, error) {
+	connection, _, errno := syscall.Syscall(syscall.SYS_ACCEPT, uintptr(listener), 0, 0)
+	if errno != 0 {
+		return -1, errno
+	}
+	return int(connection), nil
 }
 
 func listen() (int, error) {
