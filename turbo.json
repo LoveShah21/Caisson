@@ -2,6 +2,8 @@
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
     "CAISSON_BENCH_IMAGE",
+    "CAISSON_BENCH_DRIVER",
+    "CAISSON_BENCH_FIRECRACKER",
     "CAISSON_BENCH_SAMPLES",
     "CAISSON_ENV",
     "CAISSON_MANUAL_FC_TEST",
