@@ -118,27 +118,66 @@ async function exchangeOnce(
     const socket = net.createConnection(socketPath);
     let received = "";
     let connected = false;
-    const timeout = setTimeout(() => {
+    let handshakeComplete = false;
+    let settled = false;
+
+    const fail = (error: ProbeConnectionError): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
       socket.destroy();
-      reject(new ProbeConnectionError(connected, "development probe timed out"));
+      reject(error);
+    };
+
+    const succeed = (response: string): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(response);
+    };
+
+    const timeout = setTimeout(() => {
+      fail(new ProbeConnectionError(connected, "development probe timed out"));
     }, timeoutMs);
     socket.setEncoding("utf8");
     socket.once("connect", () => {
       connected = true;
-      socket.write(`CONNECT ${port}\n${payload}`);
+      socket.write(`CONNECT ${port}\n`);
     });
     socket.on("data", (chunk: string) => {
       received += chunk;
+      if (!handshakeComplete) {
+        const newline = received.indexOf("\n");
+        if (newline === -1) {
+          return;
+        }
+        const handshake = received.slice(0, newline);
+        received = received.slice(newline + 1);
+        if (!/^OK \d+$/u.test(handshake)) {
+          fail(new ProbeConnectionError(true, "Firecracker vsock CONNECT was not acknowledged"));
+          return;
+        }
+        handshakeComplete = true;
+        socket.write(payload);
+      }
+
       const newline = received.indexOf("\n");
       if (newline !== -1) {
-        clearTimeout(timeout);
-        socket.end();
-        resolve(received.slice(0, newline));
+        succeed(received.slice(0, newline));
       }
     });
     socket.once("error", (error: Error) => {
-      clearTimeout(timeout);
-      reject(new ProbeConnectionError(connected, error));
+      fail(new ProbeConnectionError(connected, error));
+    });
+    socket.once("close", () => {
+      if (!settled) {
+        fail(new ProbeConnectionError(connected, "development probe connection closed"));
+      }
     });
   });
 }

@@ -201,7 +201,7 @@ export class FirecrackerDriver implements IsolationDriver {
   async destroy(handle: SandboxHandle): Promise<void> {
     const record = this.#getRecord(handle);
     this.#records.delete(handle.id);
-    await this.#stopProcess(record);
+    await this.#stopProcess(record, this.#manualDiagnosticsEnabled());
   }
 
   async #assertHostRequirements(): Promise<void> {

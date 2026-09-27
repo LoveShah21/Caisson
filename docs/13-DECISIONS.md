@@ -139,7 +139,7 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** Firecracker has no host-side exec API. M-1 needs a narrow mechanical check that a booted microVM can receive an infrastructure command and return output. The temporary static probe listens only on reserved vsock port `9999`, accepts one newline-delimited JSON argv request per connection, executes it without a shell, returns stdout and stderr, and closes the connection. It has no authentication, policy, or allowlist because it is not an agent capability. The probe is built only into `m1-dev-probe-rootfs.ext4`, and the Firecracker driver refuses that artifact when `CAISSON_ENV=production`.
 
-**Consequences:** The probe is deliberately unsafe for a live agent session and exists only for opt-in M-1 verification. It must never be included in a rootfs or snapshot eligible for promotion, must never be reachable from the broker or guest-to-broker protocol, and must be removed once the M-3 guest runtime exec tool exists.
+**Consequences:** The probe is deliberately unsafe for a live agent session and exists only for opt-in M-1 verification. It must never be included in a rootfs or snapshot eligible for promotion, must never be reachable from the broker or guest-to-broker protocol, and must be removed once the M-3 guest runtime exec tool exists. While `CAISSON_MANUAL_FC_TEST=1`, failed and destroyed driver instances retain their runtime directory and Firecracker log for host diagnosis; this mode must not be used for production sessions.
 
 ---
 
