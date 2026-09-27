@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
 const CAISSON_INFRA_PROBE_PORT = 9999
 const afVsock = 40
 const vmaddrCIDAny = 0xffffffff
+const acceptErrorBackoff = 50 * time.Millisecond
 
 type sockaddrVM struct {
 	Family   uint16
@@ -47,6 +49,8 @@ func main() {
 	for {
 		connection, _, err := syscall.Accept(listener)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "m1 development probe: accept error: %v\n", err)
+			time.Sleep(acceptErrorBackoff)
 			continue
 		}
 		fmt.Fprintln(os.Stderr, "m1 development probe: connection accepted")
