@@ -16,8 +16,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@caisson/db": "workspace:*",
     "@caisson/isolation": "workspace:*",
     "@caisson/protocol": "workspace:*",
-    "@caisson/telemetry": "workspace:*"
+    "@caisson/telemetry": "workspace:*",
+    "argon2": "^0.45.1",
+    "fastify": "^5.12.5"
   }
 }

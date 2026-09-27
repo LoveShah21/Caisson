@@ -56,8 +56,10 @@ export const CreateSessionRequestSchema = z
       .strict(),
     scopes: z.array(z.string().min(1)).min(1),
     approvalMode: ApprovalModeSchema,
+    policyBundleId: SessionIdSchema.optional(),
     ttlSeconds: z.number().int().positive(),
     idleTimeoutSeconds: z.number().int().positive(),
+    requestedBy: z.string().trim().min(1),
     purpose: z.string().optional(),
     metadata: z.record(z.string(), z.json()).default({}),
   })

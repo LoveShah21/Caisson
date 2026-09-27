@@ -108,3 +108,32 @@ export const sessionTokens = pgTable(
     uniqueIndex("session_tokens_session_id_uidx").on(table.sessionId),
   ],
 );
+
+export const transportBindings = pgTable(
+  "transport_bindings",
+  {
+    id: uuid().primaryKey(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    hostId: text("host_id").notNull(),
+    vsockCid: integer("vsock_cid").notNull(),
+    tokenId: uuid("token_id")
+      .notNull()
+      .references(() => sessionTokens.id),
+    boundAt: timestamp("bound_at", { withTimezone: true }).notNull().defaultNow(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("transport_bindings_active_peer_uidx")
+      .on(table.hostId, table.vsockCid)
+      .where(sql`${table.releasedAt} IS NULL`),
+  ],
+);
+
+export const settings = pgTable("settings", {
+  key: text().primaryKey(),
+  value: jsonb().$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text("updated_by"),
+});
