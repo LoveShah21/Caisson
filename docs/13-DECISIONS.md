@@ -174,3 +174,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** The temporary probe needs devtmpfs and device nodes during boot. Its specifically named rootfs is therefore attached writable. The build creates `/dev` and fixes executable modes explicitly. The probe also supplies an in-memory empty stdin, so command execution does not depend on `/dev/null` being available.
 
 **Consequences:** Only `m1-dev-probe-rootfs.ext4` is writable. It remains ineligible for production and snapshot promotion under ADR-12. Other rootfs images remain read-only until a separately reviewed persistent-workspace design exists.
+
+---
+
+## ADR-15: Align milestone requirements with their implementable dependencies
+**Status:** accepted
+
+**Alternatives:** Leave FR-1 through FR-17 and FR-62 assigned to M-1 despite the narrower M-1 gate; defer all lifecycle and snapshot requirements until M-4.
+
+**Reasoning:** M-1 establishes the isolation-driver boundary and verifies both drivers. Session endpoints, token binding, lifecycle orchestration, snapshot scheduling and storage require the M-2 control-plane and broker work. The blocked-egress monitor requires the M-4 interception work. Assigning those requirements to the milestones that provide their dependencies keeps the roadmap and acceptance gates consistent.
+
+**Consequences:** M-1 covers FR-8 through FR-12 only. M-2 additionally covers FR-1 through FR-7 and FR-13 through FR-17. M-4 additionally covers FR-62. The M-1 tag is recreated only after its corrected gate is complete.
