@@ -146,12 +146,34 @@ A token value, a credential, an approval nonce, another session's identifier, or
 
 ```ts
 interface IsolationDriver {
-  create(spec: SandboxSpec): Promise<SandboxHandle>;
+  prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
+  start(handle: SandboxHandle): Promise<void>;
   exec(h: SandboxHandle, req: ExecRequest): Promise<ExecResult>;
   snapshot(h: SandboxHandle, kind: 'base' | 'session'): Promise<SnapshotRef>;
   restore(ref: SnapshotRef, spec: SandboxSpec): Promise<SandboxHandle>;
   destroy(h: SandboxHandle): Promise<void>;
   capabilities(): DriverCapabilities;   // { hardwareIsolation, snapshotSupport, maxConcurrent }
+}
+
+interface SandboxHandle {
+  id: string;
+  driver: 'firecracker' | 'container';
+}
+
+interface PreparedSandbox {
+  handle: SandboxHandle;
+  transport: TransportDescriptor;
+}
+
+interface TransportHost {
+  reserve(descriptor: TransportDescriptor): Promise<void>;  // creates and owns the listener
+  release(descriptor: TransportDescriptor): Promise<void>;  // only after destroy(handle)
+}
+
+interface TransportDescriptor {
+  kind: 'vsock' | 'unix';
+  hostId: string;
+  peerIdentifier: string;             // host-only and opaque to the guest
 }
 
 interface ServiceAdapter {

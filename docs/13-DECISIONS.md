@@ -196,3 +196,36 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** FR-22 requires policy evaluation before a credential is fetched, and FR-23 and FR-26 require durable audit handling around execution. A broker cannot truthfully satisfy its M-2 requirements without these controls. M-2 therefore includes the in-process wasm evaluator, bundle loading, default-deny and scope checks, the `redact_pii` and `role:<name>` obligations, `POST /v1/policy/simulate`, the minimum ClickHouse actions writer, and the durable completion buffer. The security-sensitive SQL parsing and evasion resistance remain in M-3 with the agent runtime. Approval-mode policy remains in M-4 with approvals.
 
 **Consequences:** M-2 expands to FR-33 through FR-36 and FR-39a, plus the minimum audit infrastructure required by FR-23 and FR-26. M-3 retains SQL parsing, Rego test gating, runtime-facing policy, and the seven-tool runtime. M-5 completes audit coverage, queries, views, dashboards, and alerts. The M-2 bootstrap creates a default policy bundle and records its id in `settings.active_policy_bundle`, so every session has a valid immutable policy reference.
+
+---
+
+## ADR-17: Bind identity to a host-issued transport descriptor
+**Status:** accepted
+
+**Alternatives:** Assume vsock everywhere; derive Firecracker CIDs from session ids; accept an identity field from the guest.
+
+**Reasoning:** The container driver has no vsock, and pretending otherwise would be isolation theater for a development-only driver. Both drivers instead issue a host-only descriptor before guest traffic is accepted. Firecracker allocates CIDs from a per-host monotonic pool with a freelist and rejects any duplicate allocation. The container driver creates a restrictive, per-session Unix socket outside the container filesystem and bind-mounts only that socket into the container. `transport_bindings` records `(host_id, transport_kind, peer_identifier)` as the sole identity source.
+
+**Consequences:** `prepare()` returns a host-only transport descriptor. The broker resolves identity from the peer endpoint selected by the driver and rejects every guest-supplied identity field. The binding migration replaces the vsock-specific column with an opaque peer identifier. Container transport provides the same identity guarantee as vsock, but not hardware isolation; production mode remains prohibited for the container driver.
+
+---
+
+## ADR-18: Split sandbox preparation from guest execution
+**Status:** accepted
+
+**Alternatives:** Keep `IsolationDriver.create()` as the only lifecycle method and persist a binding through a callback invoked by the driver.
+
+**Reasoning:** The control plane must persist a host-issued transport binding before Firecracker receives `InstanceStart` or a container starts. A callback hides this security-critical order inside the driver and makes the persistence failure path harder to test and audit. `prepare()` returns allocated resources and a descriptor while guest execution is impossible; the control plane persists the binding and calls `start()` only after success. This modifies the M-1 `IsolationDriver` interface shipped at `cdb625a`.
+
+**Consequences:** Every driver mechanism test and benchmark uses `prepare()` then `start()`. A binding persistence failure calls `destroy()` on the prepared handle and fails closed. `create()` may exist only as a private convenience inside an implementation; it is not part of the public interface.
+
+---
+
+## ADR-19: The broker owns host-side transport listeners
+**Status:** accepted
+
+**Alternatives:** Let each isolation driver create and accept its own host-side listener; release the listener before sandbox destruction.
+
+**Reasoning:** B1 terminates at the host-side broker. A driver-owned listener would create a second hidden host boundary and leave the broker unable to own the connection lifecycle. `transportHost.reserve()` creates and owns the Firecracker vsock-side or container Unix-socket listener. Drivers only attach their sandbox-specific side to that endpoint. Destroying a listener while its sandbox remains live risks a connection being misclassified or dropped during teardown.
+
+**Consequences:** `prepare(spec, transportHost)` invokes the broker-owned reservation before guest execution is possible. `destroy(handle)` always completes before `transportHost.release(descriptor)` is called. Driver code must never call `listen()` or `accept()` for guest broker transport.

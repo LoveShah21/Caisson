@@ -73,16 +73,23 @@ The mechanism behind FR-20. A guest is identified by which connection it is on, 
 
 ```sql
 CREATE TABLE transport_bindings (
-  id           UUID PRIMARY KEY,
-  session_id   UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  host_id      TEXT NOT NULL,
-  vsock_cid    INTEGER NOT NULL,
-  token_id     UUID NOT NULL REFERENCES session_tokens(id),
-  bound_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  released_at  TIMESTAMPTZ
+  id              UUID PRIMARY KEY,
+  session_id      UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  host_id         TEXT NOT NULL,
+  transport_kind  TEXT NOT NULL,             -- vsock | unix
+  peer_identifier TEXT NOT NULL,             -- host-assigned, opaque to the guest
+  token_id        UUID NOT NULL REFERENCES session_tokens(id),
+  bound_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  released_at     TIMESTAMPTZ
 );
-CREATE UNIQUE INDEX ON transport_bindings (host_id, vsock_cid) WHERE released_at IS NULL;
+CREATE UNIQUE INDEX ON transport_bindings (host_id, transport_kind, peer_identifier)
+  WHERE released_at IS NULL;
 ```
+
+The mechanism differs by driver but the guarantee does not. Firecracker uses a
+host-allocated vsock CID; the container driver uses a host-created per-session
+Unix socket. The control plane persists the opaque peer identifier before guest
+traffic is accepted. The guest never receives it and cannot select it.
 
 ### 1.4 policy_bundles
 

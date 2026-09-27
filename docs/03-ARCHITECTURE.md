@@ -43,6 +43,8 @@ There are exactly three, and they are the only structure that matters.
 
 **B1: guest to host.** Everything inside the microVM is untrusted. The agent, its prompt, its context, any data a service returned to it. Crossing B1 means crossing a vsock into the broker, or crossing a network namespace into the interceptor. Nothing else crosses.
 
+Transport identity at B1 is driver-specific in mechanism but uniform in guarantee: Firecracker uses a host-assigned vsock CID and the container driver uses a host-created Unix socket. Both are established by the host before guest traffic is accepted and neither is guest-supplied.
+
 **B2: host to control plane.** The broker is trusted to execute correctly but is not trusted to author policy or mint identity. It reads policy bundles and session records; it does not write them.
 
 **B3: broker to external services.** Credential values cross here and nowhere else. The control plane handles only `credential_refs`, which are backend paths and never secret values.
@@ -74,23 +76,24 @@ Next.js. Subscribes to the websocket hub, renders pending requests in human-read
 
 ## 4. Request path for a brokered action
 
-1. Agent calls the `broker` tool.
-2. Runtime writes a framed request to vsock.
-3. Broker resolves the session from the connection binding. Not from the payload.
-4. Broker checks token validity and loads the scope set from Postgres.
-5. Broker resolves the adapter and method, validates params against the schema.
-6. Broker builds the policy input and evaluates the wasm bundle.
-7. On `deny`, broker writes one terminal deny record before returning. Failure here aborts the return and no credential is touched.
-8. On `require_approval`, broker persists the approval and writes a `require_approval` audit record before waiting. A denial or timeout writes a terminal resolution record and returns. An approved decision is persisted before the action continues, and the eventual execution outcome records the resolution.
-9. For an executable action, broker writes `action.started` to ClickHouse. Failure here aborts before a credential is touched.
-10. Broker fetches the credential, applying any role-downgrade obligation.
-11. Adapter executes with pooling and timeout.
-12. Response passes through redaction if obliged.
-13. Broker writes `action.completed` or `action.failed` directly to ClickHouse. If the direct write fails, it appends the record to the durable completion buffer for retry.
-14. The result is framed back over vsock only after the completion record is accepted by ClickHouse or the durable buffer.
-15. A reconciliation job flags every `action.started` without a matching terminal record past the configured threshold as orphaned and retries buffered records until the pair is complete.
+1. Control plane calls `prepare()`. The driver allocates a host-only descriptor and asks the broker-owned `transportHost` to reserve the listener; drivers attach to that listener but never call `listen()` or `accept()` themselves. The control plane persists the returned descriptor as a transport binding, then calls `start()`. A persistence failure destroys the prepared sandbox before `transportHost.release()` removes its listener.
+2. Agent calls the `broker` tool.
+3. Runtime writes a framed request to vsock or the container's mounted Unix socket.
+4. Broker resolves the session from the connection binding. Not from the payload.
+5. Broker checks token validity and loads the scope set from Postgres.
+6. Broker resolves the adapter and method, validates params against the schema.
+7. Broker builds the policy input and evaluates the wasm bundle.
+8. On `deny`, broker writes one terminal deny record before returning. Failure here aborts the return and no credential is touched.
+9. On `require_approval`, broker persists the approval and writes a `require_approval` audit record before waiting. A denial or timeout writes a terminal resolution record and returns. An approved decision is persisted before the action continues, and the eventual execution outcome records the resolution.
+10. For an executable action, broker writes `action.started` to ClickHouse. Failure here aborts before a credential is touched.
+11. Broker fetches the credential, applying any role-downgrade obligation.
+12. Adapter executes with pooling and timeout.
+13. Response passes through redaction if obliged.
+14. Broker writes `action.completed` or `action.failed` directly to ClickHouse. If the direct write fails, it appends the record to the durable completion buffer for retry.
+15. The result is framed back over vsock only after the completion record is accepted by ClickHouse or the durable buffer.
+16. A reconciliation job flags every `action.started` without a matching terminal record past the configured threshold as orphaned and retries buffered records until the pair is complete.
 
-Steps 3 through 9 happen before any secret is touched. That ordering is a requirement, not an implementation detail. Pre-execution audit is fail-closed. Post-execution audit is fail-durable because an external side effect cannot be undone by refusing to return its result.
+Steps 4 through 10 happen before any secret is touched. That ordering is a requirement, not an implementation detail. Pre-execution audit is fail-closed. Post-execution audit is fail-durable because an external side effect cannot be undone by refusing to return its result.
 
 ## 5. Failure behaviour
 
