@@ -22,5 +22,11 @@ trap 'rm -rf "$work"' EXIT
 truncate -s 64M "$output"
 mkfs.ext4 -q -F "$output"
 debugfs -w -R "mkdir /bin" "$output" >/dev/null
+debugfs -w -R "mkdir /dev" "$output" >/dev/null
 debugfs -w -R "write $work/init /init" "$output" >/dev/null
 debugfs -w -R "write $work/echo /bin/echo" "$output" >/dev/null
+debugfs -w -R "sif /init mode 0100755" "$output" >/dev/null
+debugfs -w -R "sif /bin/echo mode 0100755" "$output" >/dev/null
+
+debugfs -R "stat /init" "$output" | grep -q "Mode:.*0100755"
+debugfs -R "stat /bin/echo" "$output" | grep -q "Mode:.*0100755"

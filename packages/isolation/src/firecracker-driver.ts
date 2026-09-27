@@ -2,11 +2,15 @@ import type { SpawnOptions } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, constants, mkdir, open, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { CaissonError, type DriverCapabilities } from "@caisson/protocol";
 
 import { callFirecrackerApi } from "./firecracker-api.js";
+import {
+  firecrackerRootfsDriveConfig,
+  isM1DevelopmentProbeRootfs,
+} from "./firecracker-drive-config.js";
 import type {
   ExecRequest,
   ExecResult,
@@ -111,12 +115,12 @@ export class FirecrackerDriver implements IsolationDriver {
         kernel_image_path: this.#options.kernelImagePath,
         boot_args: this.#options.bootArgs,
       });
-      await this.#callApi(record, "PUT", "/drives/rootfs", {
-        drive_id: "rootfs",
-        path_on_host: this.#options.rootfsPath,
-        is_root_device: true,
-        is_read_only: true,
-      });
+      await this.#callApi(
+        record,
+        "PUT",
+        "/drives/rootfs",
+        firecrackerRootfsDriveConfig(this.#options.rootfsPath),
+      );
       await this.#callApi(record, "PUT", "/vsock", {
         guest_cid: this.#guestCidFor(spec.id),
         uds_path: record.vsockPath,
@@ -232,10 +236,7 @@ export class FirecrackerDriver implements IsolationDriver {
 
   #assertProductionRootfs(): void {
     const environment: unknown = Reflect.get(process.env, "CAISSON_ENV");
-    if (
-      environment === "production" &&
-      basename(this.#options.rootfsPath) === "m1-dev-probe-rootfs.ext4"
-    ) {
+    if (environment === "production" && isM1DevelopmentProbeRootfs(this.#options.rootfsPath)) {
       throw new CaissonError(
         "SANDBOX_FAILED",
         "production refuses the M-1 development probe rootfs",

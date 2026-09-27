@@ -163,3 +163,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** The vsock multiplexer can acknowledge a host stream before the temporary guest probe is ready to read it. Completing a harmless `/bin/echo` request and response proves the probe accept loop, request parsing, command execution, and response path are usable.
 
 **Consequences:** M-1 boot readiness includes one guest command round trip and is therefore slower than a transport-only handshake. This remains infrastructure-only development scaffolding from ADR-12, not an agent capability or INV-8 test.
+
+---
+
+## ADR-14: The M-1 probe rootfs is writable only for boot support
+**Status:** accepted
+
+**Alternatives:** Mount the probe rootfs read-only and rely on an implicit `/dev/null`; introduce a general writable-root option for all Firecracker images.
+
+**Reasoning:** The temporary probe needs devtmpfs and device nodes during boot. Its specifically named rootfs is therefore attached writable. The build creates `/dev` and fixes executable modes explicitly. The probe also supplies an in-memory empty stdin, so command execution does not depend on `/dev/null` being available.
+
+**Consequences:** Only `m1-dev-probe-rootfs.ext4` is writable. It remains ineligible for production and snapshot promotion under ADR-12. Other rootfs images remain read-only until a separately reviewed persistent-workspace design exists.

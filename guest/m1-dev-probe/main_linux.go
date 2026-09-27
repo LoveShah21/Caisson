@@ -89,6 +89,9 @@ func handle(fd int) {
 	}
 
 	command := exec.Command(input.Argv[0], input.Argv[1:]...)
+	// Do not let os/exec open /dev/null for an unset stdin. The M-1 probe
+	// must work before the guest has mounted devtmpfs.
+	command.Stdin = bytes.NewReader(nil)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -99,6 +102,10 @@ func handle(fd int) {
 		result.ExitCode = 1
 		if exitError, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitError.ExitCode()
+		} else if result.Stderr == "" {
+			// Start failures, including a missing binary, still receive a framed
+			// response. Do not expose host error text through this dev protocol.
+			result.Stderr = "command failed"
 		}
 	}
 	writeResponse(fd, result)
