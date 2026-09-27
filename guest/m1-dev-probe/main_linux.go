@@ -38,16 +38,18 @@ type response struct {
 func main() {
 	listener, err := listen()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "m1 development probe failed to listen")
+		fmt.Fprintln(os.Stderr, "m1 development probe: listener bind failed")
 		os.Exit(1)
 	}
 	defer syscall.Close(listener)
+	fmt.Fprintln(os.Stderr, "m1 development probe: listener bound")
 
 	for {
 		connection, _, err := syscall.Accept(listener)
 		if err != nil {
 			continue
 		}
+		fmt.Fprintln(os.Stderr, "m1 development probe: connection accepted")
 		// A closed or slow host probe must not prevent the listener from
 		// accepting the next connection.
 		go handle(connection)
@@ -78,12 +80,15 @@ func handle(fd int) {
 	reader := bufio.NewReader(connection)
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "m1 development probe: request read failed")
 		return
 	}
+	fmt.Fprintln(os.Stderr, "m1 development probe: request line read")
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
 	var input request
 	if decoder.Decode(&input) != nil || len(input.Argv) == 0 || input.Argv[0] == "" {
+		fmt.Fprintln(os.Stderr, "m1 development probe: request invalid")
 		writeResponse(fd, response{ExitCode: 2, Stderr: "invalid request"})
 		return
 	}
@@ -96,7 +101,14 @@ func handle(fd int) {
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
-	err = command.Run()
+	fmt.Fprintln(os.Stderr, "m1 development probe: command starting")
+	if err := command.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "m1 development probe: command start failed")
+		writeResponse(fd, response{ExitCode: 1, Stderr: "command failed"})
+		return
+	}
+	fmt.Fprintln(os.Stderr, "m1 development probe: command started")
+	err = command.Wait()
 	result := response{ExitCode: 0, Stdout: stdout.String(), Stderr: stderr.String()}
 	if err != nil {
 		result.ExitCode = 1
@@ -108,13 +120,20 @@ func handle(fd int) {
 			result.Stderr = "command failed"
 		}
 	}
+	fmt.Fprintln(os.Stderr, "m1 development probe: command completed")
 	writeResponse(fd, result)
 }
 
 func writeResponse(fd int, value response) {
+	fmt.Fprintln(os.Stderr, "m1 development probe: response writing")
 	encoded, err := json.Marshal(value)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, "m1 development probe: response encoding failed")
 		return
 	}
-	_, _ = syscall.Write(fd, append(encoded, '\n'))
+	if _, err := syscall.Write(fd, append(encoded, '\n')); err != nil {
+		fmt.Fprintln(os.Stderr, "m1 development probe: response write failed")
+		return
+	}
+	fmt.Fprintln(os.Stderr, "m1 development probe: response written")
 }
