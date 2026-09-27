@@ -6,3 +6,5 @@
 - cpuModel: Intel(R) Core(TM) i5-10300H CPU @ 2.50GHz
 - cpuCount: 8
 - memoryBytes: 8419024896
+
+On WSL2, `cpuCount` and `memoryBytes` describe the resources allocated to the Linux VM, not the physical resources of the Windows host.
