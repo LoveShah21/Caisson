@@ -77,6 +77,11 @@ export const sessions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     terminatedAt: timestamp("terminated_at", { withTimezone: true }),
     terminationReason: text("termination_reason"),
+    nextAuditSeq: integer("next_audit_seq").notNull().default(0),
+    actionAllowCount: integer("action_allow_count").notNull().default(0),
+    actionDenyCount: integer("action_deny_count").notNull().default(0),
+    actionRequireApprovalCount: integer("action_require_approval_count").notNull().default(0),
+    failureReason: text("failure_reason"),
   },
   (table) => [
     index("sessions_active_status_idx")
@@ -138,3 +143,26 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   updatedBy: text("updated_by"),
 });
+
+export const auditOutbox = pgTable(
+  "audit_outbox",
+  {
+    id: uuid().primaryKey(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    seq: integer().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().notNull(),
+    deliveryState: text("delivery_state").notNull().default("pending"),
+    deliveryAttempts: integer("delivery_attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("audit_outbox_session_seq_uidx").on(table.sessionId, table.seq),
+    index("audit_outbox_pending_session_seq_idx")
+      .on(table.sessionId, table.seq)
+      .where(sql`${table.deliveryState} = 'pending'`),
+  ],
+);

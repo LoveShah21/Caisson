@@ -67,9 +67,9 @@ Three Grafana dashboards, provisioned as code in `deploy/grafana/`.
 | Approval starvation | any pending approval older than half its timeout |
 | Unisolated production session | any session with `hardware_isolated = false` in production |
 | Boot degradation | p99 warm boot above two seconds for ten minutes |
-| Sequence gap | a session with non-contiguous `seq` values in `actions` |
+| Sequence gap | a session with non-contiguous `seq` values in `actions` and no pending matching `audit_outbox` row |
 
-The sequence-gap and orphaned-action alerts are the tripwires for INV-4. Either means the audit trail may be incomplete and requires reconciliation.
+The sequence-gap and orphaned-action alerts are the tripwires for INV-4. A sequence gap with a pending matching `audit_outbox` row is delivery lag and requires draining, not a lost record. Only a gap with no pending outbox row is evidence that the audit trail may be incomplete and requires reconciliation.
 
 ## 6. Audit reconciliation
 

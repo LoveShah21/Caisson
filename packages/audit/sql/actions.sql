@@ -1,0 +1,37 @@
+CREATE TABLE IF NOT EXISTS actions (
+  session_id       UUID,
+  action_id        UUID,
+  timestamp        DateTime64(3),
+  seq              UInt32,
+  event_type       LowCardinality(String),
+  action_type      LowCardinality(String),
+  service          LowCardinality(String),
+  method           LowCardinality(String),
+  decision         LowCardinality(String),
+  policy_bundle    LowCardinality(String),
+  policy_reason    String,
+  obligations      Array(LowCardinality(String)),
+  scope_used       LowCardinality(String),
+  role_used        LowCardinality(String),
+  params_hash      FixedString(64),
+  params_preview   String,
+  result_bytes     UInt32,
+  result_hash      FixedString(64),
+  redaction_count  UInt16,
+  duration_ms      UInt32,
+  approval_id      Nullable(UUID),
+  approval_wait_ms Nullable(UInt32),
+  skill_loaded     LowCardinality(String),
+  agent_intent     String,
+  driver           LowCardinality(String),
+  hardware_isolated UInt8,
+  trace_id         String,
+  span_id          String,
+  error_code       LowCardinality(String),
+  error_message    String,
+  network_destination String,
+  network_protocol LowCardinality(String)
+) ENGINE = MergeTree
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (session_id, seq)
+TTL toDateTime(timestamp) + INTERVAL 13 MONTH;

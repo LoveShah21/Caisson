@@ -19,6 +19,11 @@ export const SessionStatusSchema = z.enum([
 ]);
 
 export const TerminalSessionStatusSchema = z.enum(["terminated", "failed"]);
+export const SessionFailureReasonSchema = z.enum([
+  "start_timeout",
+  "driver_error",
+  "cleanup_pending",
+]);
 
 export const BrokerCallBodySchema = z
   .object({
@@ -76,6 +81,38 @@ export const CreateSessionResponseSchema = z
   })
   .strict();
 
+export const GetSessionResponseSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    status: SessionStatusSchema,
+    scopes: z.array(z.string()),
+    driver: IsolationDriverNameSchema.nullable(),
+    hardwareIsolated: z.boolean(),
+    intent: z.string().nullable(),
+    requestedBy: z.string(),
+    policyBundleId: SessionIdSchema,
+    createdAt: z.string().datetime({ offset: true }),
+    expiresAt: z.string().datetime({ offset: true }),
+    lastActivityAt: z.string().datetime({ offset: true }),
+    failureReason: SessionFailureReasonSchema.nullable(),
+    actionCounts: z
+      .object({
+        allow: z.number().int().nonnegative(),
+        deny: z.number().int().nonnegative(),
+        requireApproval: z.number().int().nonnegative(),
+      })
+      .strict(),
+    pendingApprovals: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const DeleteSessionResponseSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    status: TerminalSessionStatusSchema,
+  })
+  .strict();
+
 export const ErrorResponseSchema = z
   .object({
     error: z
@@ -94,9 +131,12 @@ export type BrokerCallBody = z.infer<typeof BrokerCallBodySchema>;
 export type BrokerCallRequest = z.infer<typeof BrokerCallRequestSchema>;
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
+export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>;
 export type DriverCapabilities = z.infer<typeof DriverCapabilitiesSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export type IsolationDriverName = z.infer<typeof IsolationDriverNameSchema>;
+export type GetSessionResponse = z.infer<typeof GetSessionResponseSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
+export type SessionFailureReason = z.infer<typeof SessionFailureReasonSchema>;
 export type TerminalSessionStatus = z.infer<typeof TerminalSessionStatusSchema>;

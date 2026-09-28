@@ -54,10 +54,33 @@ but is self-reported in v1 and is not an authentication or access-control
 signal.
 
 ### GET /v1/sessions/:id
-Returns status, timings, scopes, driver, `hardwareIsolated`, counts by decision, pending approvals.
+```jsonc
+{
+  "sessionId": "018f...", "status": "ready", "scopes": ["warehouse.readonly"],
+  "driver": "firecracker", "hardwareIsolated": true,
+  "intent": "Investigate the spike in failed checkouts since 09:00",
+  "requestedBy": "love@example.com", "policyBundleId": "018f...",
+  "createdAt": "...", "expiresAt": "...", "lastActivityAt": "...",
+  "failureReason": null,
+  "actionCounts": { "allow": 3, "deny": 1, "requireApproval": 0 },
+  "pendingApprovals": 0
+}
+```
+`intent` is the session's operator-stated `purpose`. Counts come from Postgres
+counters updated with audit-sequence allocation, not ClickHouse. `failureReason`
+is a nullable coarse enum: `start_timeout`, `driver_error`, or `cleanup_pending`.
+Token material, host ids, transport identifiers, and socket paths are never returned.
 
 ### DELETE /v1/sessions/:id
-202, terminates within five seconds. Body `{ "reason": "..." }`.
+202, terminates within five seconds. Body `{ "reason": "..." }`. Response is
+`{ "sessionId": "...", "status": "terminated" | "failed" }`. Repeating a
+delete of a terminal session is a no-op returning that terminal state.
+
+For session creation, the initial lifecycle audit record is synchronous only to
+the Postgres `audit_outbox`: the session, token hash, binding, and sequence-1
+outbox record commit in one transaction before the `201 booting` response.
+ClickHouse delivery is asynchronous. Guest execution starts only after that
+transaction commits.
 
 ### POST /v1/sessions/:id/messages
 Sends a user turn to the agent. `{ "content": "..." }`.

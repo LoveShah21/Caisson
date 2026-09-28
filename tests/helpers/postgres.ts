@@ -6,6 +6,7 @@ import { GenericContainer, Wait } from "testcontainers";
 
 export interface PostgresFixture {
   readonly sql: Sql;
+  readonly url: string;
   close(): Promise<void>;
 }
 
@@ -19,15 +20,15 @@ export async function createPostgresFixture(): Promise<PostgresFixture> {
     .withExposedPorts(5432)
     .withWaitStrategy(Wait.forLogMessage("database system is ready to accept connections"))
     .start();
-  const sql = postgres(
-    `postgres://caisson:caisson-postgres-test-only@${container.getHost()}:${container.getMappedPort(5432)}/caisson`,
-  );
+  const url = `postgres://caisson:caisson-postgres-test-only@${container.getHost()}:${container.getMappedPort(5432)}/caisson`;
+  const sql = postgres(url);
 
   await waitForDatabase(sql);
   await applyMigrations(sql);
 
   return {
     sql,
+    url,
     async close() {
       await sql.end({ timeout: 5 });
       await container.stop();
@@ -54,6 +55,7 @@ async function applyMigrations(sql: Sql): Promise<void> {
     "0001_m0_foundations.sql",
     "0002_m2_session_identity.sql",
     "0003_m2_generalize_transport_bindings.sql",
+    "0004_m2_audit_outbox.sql",
   ]) {
     const source = await readFile(resolve("packages/db/migrations", migration), "utf8");
     await sql.unsafe(source);

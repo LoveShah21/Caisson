@@ -36,7 +36,12 @@ CREATE TABLE sessions (
   last_activity_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   terminated_at       TIMESTAMPTZ,
-  termination_reason  TEXT
+  termination_reason  TEXT,
+  failure_reason      TEXT,
+  next_audit_seq      INTEGER NOT NULL DEFAULT 0,
+  action_allow_count  INTEGER NOT NULL DEFAULT 0,
+  action_deny_count   INTEGER NOT NULL DEFAULT 0,
+  action_require_approval_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX ON sessions (status) WHERE status IN ('ready','active','suspended');
@@ -47,6 +52,15 @@ CREATE INDEX ON sessions (requested_by, created_at DESC);
 `hardware_isolated` is denormalised onto the session deliberately. When someone asks in six months whether a given session ran with real isolation, the answer must be in the row, not inferred from configuration that has since changed.
 
 For both `terminated` and `failed`, `termination_reason` carries the specific cause. Queries must not infer the cause from `status` alone.
+
+`next_audit_seq` is the sole per-session allocator for audit sequence numbers. It
+is incremented with `UPDATE ... RETURNING` in the same Postgres transaction that
+inserts an `audit_outbox` event.
+
+`failure_reason` is nullable and contains only `start_timeout`, `driver_error`,
+or `cleanup_pending`. It never contains a driver error string. The three action
+counters are updated in the same transaction as sequence allocation, so the
+control plane never derives them from asynchronous ClickHouse delivery.
 
 ### 1.2 session_tokens
 
@@ -200,13 +214,41 @@ CREATE TABLE settings (
 ```
 Holds `active_base_snapshot`, `active_policy_bundle`, `interceptor_allowlist`, and similar.
 
-M-2 bootstrap inserts a minimal default policy bundle and sets
-`active_policy_bundle` to its id in the same migration transaction. A session
-creation request may specify `policyBundleId`; otherwise the control plane uses
-this setting. Bootstrap failure prevents session creation rather than creating a
-session without a policy bundle.
+`pnpm bootstrap:policy` explicitly compiles the source-controlled minimal default
+bundle, stores its Rego source, wasm blob, and source hash, and sets
+`active_policy_bundle` only when no active bundle exists. A session creation
+request may specify `policyBundleId`; otherwise the control plane uses this
+setting. The setting value is `{ "policyBundleId": "<uuid>" }`. Bootstrap
+requires all Postgres migrations to have run. Bootstrap failure prevents session
+creation rather than creating a session without a policy bundle.
 
-### 1.9 Entity relationships
+### 1.9 audit_outbox
+
+```sql
+CREATE TABLE audit_outbox (
+  id                UUID PRIMARY KEY,
+  session_id        UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq               INTEGER NOT NULL CHECK (seq > 0),
+  payload           JSONB NOT NULL,
+  delivery_state    TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (delivery_state IN ('pending', 'delivered')),
+  delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0),
+  last_error        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  delivered_at      TIMESTAMPTZ,
+  UNIQUE (session_id, seq)
+);
+CREATE INDEX ON audit_outbox (session_id, seq) WHERE delivery_state = 'pending';
+```
+
+This is the durable source for events awaiting ClickHouse. The payload contains
+only an event's hash, redacted preview, and safe metadata. It never contains raw
+parameters, credentials, secret values, or result bodies. Delivery locks one
+session at a time, in sequence order. Before retrying an ambiguous ClickHouse
+insert, the writer queries `(session_id, seq)` and skips the insert when it
+already exists. A pending outbox row means delivery lag, not a missing event.
+
+### 1.10 Entity relationships
 
 ```
 policy_bundles 1---* sessions 1---* session_tokens 1---* transport_bindings
@@ -214,6 +256,7 @@ policy_bundles 1---* sessions 1---* session_tokens 1---* transport_bindings
                         +---* approvals
                         +---* snapshots (kind='session')
 services 1---* credential_refs
+sessions 1---* audit_outbox
 ```
 
 ## 2. ClickHouse
@@ -290,7 +333,7 @@ Implement these as named functions in `packages/audit` with typed results:
 
 ## 3. Redis
 
-Not the final store of record. Holds BullMQ queues (`approvals`, `snapshot-rebuild`, `session-reaper`), the approval wait registry, and a short-lived idempotency key set. It may also hold the persistent completion stream used when a direct post-execution ClickHouse write fails. Queue and registry state is reconstructible. A completion-stream entry is retained durably until ClickHouse acknowledges the corresponding terminal audit row; Redis persistence must be enabled when this implementation is selected instead of the on-disk broker WAL.
+Not the final store of record. Holds BullMQ queues (`approvals`, `snapshot-rebuild`, `session-reaper`), the approval wait registry, and a short-lived idempotency key set. Queue and registry state is reconstructible. Post-execution audit completion records use the Postgres `audit_outbox`, not Redis.
 
 ## 4. Rules
 

@@ -9,17 +9,19 @@
   },
   "scripts": {
     "build": "turbo run build",
+    "bootstrap:policy": "node scripts/bootstrap-policy.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "turbo run lint",
+    "policy:test": "node scripts/test-policy.mjs",
     "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
     "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
-    "@types/node": "^26.6.2",
+    "@types/node": "^24.10.0",
     "postgres": "^3.4.9",
     "testcontainers": "^12.1.0",
     "turbo": "^2.11.2",

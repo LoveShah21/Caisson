@@ -1,4 +1,7 @@
 export * from "./boot-sandbox.js";
+export * from "./periodic-reconciler.js";
+export * from "./server.js";
 export * from "./session-identity.js";
+export * from "./session-lifecycle.js";
 export * from "./session-reaper.js";
 export * from "./snapshot-scheduler.js";

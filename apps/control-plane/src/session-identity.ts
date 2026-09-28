@@ -14,6 +14,11 @@ export interface MintedSessionToken {
   readonly id: string;
 }
 
+export interface SessionTokenRecord {
+  readonly id: string;
+  readonly tokenHash: string;
+}
+
 export interface TransportBinding {
   readonly sessionId: string;
   readonly tokenId: string;
@@ -58,16 +63,14 @@ export class SessionTokenService {
   }
 
   async mint(request: MintSessionTokenRequest): Promise<MintedSessionToken> {
-    const token = randomBytes(32).toString("base64url");
-    const tokenHash = await argon2.hash(token, { type: argon2.argon2id });
-    const id = uuidV7();
+    const token = await createSessionTokenRecord();
 
     await this.#sql`
       INSERT INTO session_tokens (id, session_id, token_hash, scopes, expires_at)
-      VALUES (${id}, ${request.sessionId}, ${tokenHash}, ${[...request.scopes]}, ${request.expiresAt})
+      VALUES (${token.id}, ${request.sessionId}, ${token.tokenHash}, ${[...request.scopes]}, ${request.expiresAt})
     `;
 
-    return { id };
+    return { id: token.id };
   }
 
   async revoke(tokenId: string, reason: string): Promise<void> {
@@ -163,7 +166,15 @@ function intersectScopes(
   return tokenScopes.filter((scope) => sessionScopeSet.has(scope));
 }
 
-function uuidV7(): string {
+export async function createSessionTokenRecord(): Promise<SessionTokenRecord> {
+  const plaintext = randomBytes(32).toString("base64url");
+  return {
+    id: uuidV7(),
+    tokenHash: await argon2.hash(plaintext, { type: argon2.argon2id }),
+  };
+}
+
+export function uuidV7(): string {
   const bytes = randomBytes(16);
   const timestamp = BigInt(Date.now());
   for (let index = 5; index >= 0; index -= 1) {

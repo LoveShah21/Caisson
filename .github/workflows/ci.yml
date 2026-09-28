@@ -35,6 +35,9 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: Test policy source
+        run: pnpm policy:test
+
       - name: Lint
         run: pnpm lint
 

@@ -229,3 +229,25 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** B1 terminates at the host-side broker. A driver-owned connection lifecycle would create a second hidden host boundary and leave the broker unable to own identity allocation or teardown. The two drivers differ at the operating-system boundary. For a container, `transportHost.reserve()` directly creates and owns the owner-only Unix-socket listener. For Firecracker, `transportHost.reserve()` allocates the CID and random private UDS path and owns the connection lifecycle, but the trusted host-side Firecracker process performs the required `bind()` when configured with `uds_path`. The guest cannot reach, influence, or observe that path. Destroying an attachment while its sandbox remains live risks a connection being misclassified or dropped during teardown.
 
 **Consequences:** `reserve()` returns a runtime-only host attachment. For container transport, `peerIdentifier` and the attachment endpoint are the same random absolute Unix-socket path beneath a mode-0700 host directory and the driver bind-mounts only that socket. For Firecracker, `peerIdentifier` remains the persisted CID while the attachment supplies a separate random private UDS path. Attachment paths are never persisted. `restore()` reserves a new attachment and leaves the VM paused until the replacement binding is persisted and `start()` resumes it. A broker crash terminates sessions on that host, so endpoint recovery across a broker restart is neither supported nor attempted. `destroy(handle)` always completes before `transportHost.release(descriptor)` is called. Driver code must never call `listen()` or `accept()` for guest broker transport.
+
+---
+
+## ADR-20: Postgres audit outbox is the durable audit delivery source
+**Status:** accepted
+
+**Alternatives:** Redis stream; an on-disk broker WAL; a distributed transaction spanning Postgres and ClickHouse; changing `actions` to `ReplicatedMergeTree`.
+
+**Reasoning:** Postgres already holds the session state and can atomically allocate a per-session sequence number and record an audit event before execution. A single-node `MergeTree` keeps the specified ClickHouse engine and avoids adding ClickHouse Keeper to v1. Delivery holds a Postgres advisory lock per session and processes events in sequence order. Before retrying an ambiguous ClickHouse insert, the writer queries `(session_id, seq)`, so an insert that committed before the client timed out is not repeated. This supersedes ADR-10's Redis stream or on-disk WAL wording for the durable buffer.
+
+**Consequences:** The outbox is not an audit store and contains only hashes, redacted previews, and safe metadata. Pre-execution records commit to the outbox and then synchronously reach ClickHouse before execution can proceed. Post-execution and terminal records are fail-durable once their outbox row commits. The optional finite ClickHouse non-replicated deduplication window is defence in depth only and requires a separate decision before it is enabled.
+
+---
+
+## ADR-21: Session teardown revokes before destruction and retains failed cleanup bindings
+**Status:** accepted
+
+**Alternatives:** Release transport before destroy; keep a token live until cleanup completes; store raw driver errors as failure reasons.
+
+**Reasoning:** Revoking the token is a small idempotent database operation that removes authorization before a potentially slow or failing sandbox destroy. A binding cannot be released while destroy is unconfirmed because a still-live sandbox could retain or regain a host identity. Coarse failure reasons are sufficient for lifecycle state and avoid storing host or driver detail in an operator API response.
+
+**Consequences:** Start failure and delete attempt revoke, destroy, then release. A revoke failure never skips destroy, but release is permitted only after both revoke and destroy are confirmed. A revoke, destroy, or release failure marks the session `failed` with `cleanup_pending` and leaves the binding reserved for reconciliation. The reconciler retries all incomplete cleanup steps idempotently, with a per-session Postgres advisory lock so separate control-plane instances cannot process the same session concurrently. The control plane reconciles stale booting sessions at startup and periodically. Lifecycle state changes append durable outbox events.
