@@ -13,6 +13,12 @@
 | UI | Playwright | Approval flow including timeout |
 | Load | k6 or autocannon | Concurrency and p99 |
 
+On native Windows, Vitest's default forks pool can fail to report a final
+summary for container-backed tests even after their cleanup succeeds. Use
+`pnpm exec vitest run --pool=threads --reporter=verbose <paths>` locally for
+those tests. CI runs Linux with Vitest's default pool and must report its normal
+summary; this local workaround does not weaken CI coverage.
+
 ## 2. The mocking rule
 
 You may mock an external service. You may never mock the policy engine, the secret backend, the audit writer, the transport binding, or the isolation driver in a test that asserts an invariant. Mocking a control in the test that proves the control works is how security test suites become decorative.

@@ -21,15 +21,17 @@ describe("policy bootstrap", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: environment,
+      stdio: "pipe",
     });
     const second = spawnSync(process.execPath, ["scripts/bootstrap-policy.mjs"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: environment,
+      stdio: "pipe",
     });
 
-    expect(first.status).toBe(0);
-    expect(second.status).toBe(0);
+    expect(first.status, first.stderr).toBe(0);
+    expect(second.status, second.stderr).toBe(0);
     expect(first.stdout).toMatch(/Bootstrapped policy bundle \([1-9][0-9]* bytes\)/);
   }, 60_000);
 

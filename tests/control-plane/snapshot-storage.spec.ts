@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  await minio.close();
+  await minio?.close();
 });
 
 describe("S3BaseSnapshotStore", () => {
