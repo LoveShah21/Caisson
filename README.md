@@ -11,9 +11,22 @@ for the production isolation boundary.
 
 Requirements: Node 22 or newer, pnpm, and Docker Compose.
 
+Copy the environment template and replace the snapshot KMS and manifest-key
+placeholders with independent base64-encoded 32-byte values. The MinIO static
+KMS setting is for local development only. Production must use platform
+SSE-KMS.
+
+```bash
+cp .env.example .env
+openssl rand -base64 32
+```
+
+Set generated values in `.env` before starting Compose.
+`CAISSON_SNAPSHOT_CACHE_MAX_BYTES` must be a positive integer.
+
 ```bash
 pnpm install
-docker compose up -d
+docker compose -f deploy/docker-compose.yml up -d
 pnpm bootstrap:policy
 ```
 
@@ -24,7 +37,7 @@ pinned OPA image, stores the source and wasm bundle in Postgres, and creates
 Verify that the active bundle exists:
 
 ```bash
-docker compose exec postgres psql -U caisson -d caisson -c \
+docker compose -f deploy/docker-compose.yml exec postgres psql -U caisson -d caisson -c \
   "SELECT value FROM settings WHERE key = 'active_policy_bundle';"
 ```
 

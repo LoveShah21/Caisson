@@ -53,22 +53,51 @@ export interface ExecResult {
   readonly durationMs: number;
 }
 
+export interface SnapshotObjectRef {
+  readonly bucket: string;
+  readonly key: string;
+  readonly versionId?: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+}
+
+/** Immutable, remotely stored snapshot manifest. */
 export interface SnapshotRef {
+  readonly id: string;
+  readonly kind: "base" | "session";
+  readonly manifest: SnapshotObjectRef;
+  readonly manifestKeyId: string;
+  readonly createdAt: string;
+}
+
+/** Driver-produced local files, not eligible for persistence until stored and verified. */
+export interface LocalSnapshot {
   readonly id: string;
   readonly kind: "base" | "session";
   readonly statePath: string;
   readonly memoryPath: string;
   readonly rootfsPath?: string;
+  /** Base-only source artifact, retained in the manifest for reproducibility. */
+  readonly kernelPath?: string;
   readonly createdAt: string;
+}
+
+/** Verified local cache paths supplied to an isolation driver for restore. */
+export interface ResolvedSnapshot {
+  readonly ref: SnapshotRef;
+  readonly statePath: string;
+  readonly memoryPath: string;
+  readonly rootfsPath?: string;
+  readonly kernelPath?: string;
 }
 
 export interface IsolationDriver {
   prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
   start(handle: SandboxHandle): Promise<void>;
   exec(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult>;
-  snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<SnapshotRef>;
+  snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<LocalSnapshot>;
   restore(
-    ref: SnapshotRef,
+    ref: ResolvedSnapshot,
     spec: SandboxSpec,
     transportHost: TransportHost,
   ): Promise<PreparedSandbox>;

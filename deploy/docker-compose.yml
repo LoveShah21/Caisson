@@ -58,6 +58,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${CAISSON_MINIO_USER:-caisson}
       MINIO_ROOT_PASSWORD: ${CAISSON_MINIO_PASSWORD:-caisson-minio-local-only}
+      # Static KMS is local-development only. Production uses platform SSE-KMS.
+      MINIO_KMS_SECRET_KEY: ${CAISSON_MINIO_KMS_SECRET_KEY:?set CAISSON_MINIO_KMS_SECRET_KEY in .env}
     ports:
       - "9000:9000"
       - "9001:9001"

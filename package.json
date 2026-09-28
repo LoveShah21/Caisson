@@ -20,6 +20,7 @@
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1141.0",
     "@biomejs/biome": "^2.5.14",
     "@types/node": "^24.10.0",
     "postgres": "^3.4.9",

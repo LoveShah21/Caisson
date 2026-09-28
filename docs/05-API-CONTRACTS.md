@@ -172,10 +172,36 @@ interface IsolationDriver {
   prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
   start(handle: SandboxHandle): Promise<void>;
   exec(h: SandboxHandle, req: ExecRequest): Promise<ExecResult>;
-  snapshot(h: SandboxHandle, kind: 'base' | 'session'): Promise<SnapshotRef>;
-  restore(ref: SnapshotRef, spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
+  snapshot(h: SandboxHandle, kind: 'base' | 'session'): Promise<LocalSnapshot>;
+  restore(ref: ResolvedSnapshot, spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
   destroy(h: SandboxHandle): Promise<void>;
   capabilities(): DriverCapabilities;   // { hardwareIsolation, snapshotSupport, maxConcurrent }
+}
+
+interface SnapshotRef {
+  id: string;
+  kind: 'base' | 'session';
+  manifest: { bucket: string; key: string; versionId?: string; sha256: string; sizeBytes: number };
+  manifestKeyId: string;
+  createdAt: string;
+}
+
+interface LocalSnapshot {
+  id: string;
+  kind: 'base' | 'session';
+  statePath: string;
+  memoryPath: string;
+  rootfsPath?: string;
+  kernelPath?: string;
+  createdAt: string;
+}
+
+interface ResolvedSnapshot {
+  ref: SnapshotRef;
+  statePath: string;
+  memoryPath: string;
+  rootfsPath?: string;
+  kernelPath?: string;
 }
 
 interface SandboxHandle {

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   customType,
   index,
@@ -143,6 +144,25 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   updatedBy: text("updated_by"),
 });
+
+export const snapshots = pgTable(
+  "snapshots",
+  {
+    id: uuid().primaryKey(),
+    kind: text().notNull(),
+    sessionId: uuid("session_id").references(() => sessions.id, { onDelete: "cascade" }),
+    bucket: text().notNull(),
+    manifestKey: text("manifest_key").notNull(),
+    manifestVersion: text("manifest_version"),
+    manifestSha256: text("manifest_sha256").notNull(),
+    manifestSizeBytes: bigint("manifest_size_bytes", { mode: "number" }).notNull(),
+    manifestKeyId: text("manifest_key_id").notNull(),
+    builtAt: timestamp("built_at", { withTimezone: true }).notNull().defaultNow(),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+  },
+  (table) => [index("snapshots_kind_promoted_idx").on(table.kind, table.promotedAt.desc())],
+);
 
 export const auditOutbox = pgTable(
   "audit_outbox",

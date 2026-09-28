@@ -13,7 +13,8 @@ import type {
   PreparedSandbox,
   SandboxHandle,
   SandboxSpec,
-  SnapshotRef,
+  LocalSnapshot,
+  ResolvedSnapshot,
   TransportDescriptor,
   TransportHost,
 } from "./types.js";
@@ -152,12 +153,12 @@ export class ContainerDriver implements IsolationDriver {
     return runCommand(this.#dockerPath, args, request.timeoutMs);
   }
 
-  async snapshot(_handle: SandboxHandle, _kind: "base" | "session"): Promise<SnapshotRef> {
+  async snapshot(_handle: SandboxHandle, _kind: "base" | "session"): Promise<LocalSnapshot> {
     throw new CaissonError("SANDBOX_FAILED", "container driver does not support snapshots");
   }
 
   async restore(
-    _ref: SnapshotRef,
+    _ref: ResolvedSnapshot,
     _spec: SandboxSpec,
     _transportHost: TransportHost,
   ): Promise<PreparedSandbox> {

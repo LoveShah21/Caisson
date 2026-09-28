@@ -15,10 +15,11 @@ import type {
   ExecRequest,
   ExecResult,
   IsolationDriver,
+  LocalSnapshot,
   PreparedSandbox,
+  ResolvedSnapshot,
   SandboxHandle,
   SandboxSpec,
-  SnapshotRef,
   TransportDescriptor,
   TransportHost,
 } from "./types.js";
@@ -197,7 +198,7 @@ export class FirecrackerDriver implements IsolationDriver {
     });
   }
 
-  async snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<SnapshotRef> {
+  async snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<LocalSnapshot> {
     const record = this.#getRecord(handle);
     const id = randomUUID();
     await mkdir(this.#options.snapshotDirectory, { recursive: true });
@@ -221,16 +222,23 @@ export class FirecrackerDriver implements IsolationDriver {
       statePath,
       memoryPath,
       rootfsPath: this.#options.rootfsPath,
+      kernelPath: this.#options.kernelImagePath,
       createdAt: new Date().toISOString(),
     };
   }
 
   async restore(
-    ref: SnapshotRef,
+    ref: ResolvedSnapshot,
     spec: SandboxSpec,
     transportHost: TransportHost,
   ): Promise<PreparedSandbox> {
     this.#assertProductionRootfs();
+    if (ref.rootfsPath !== undefined && ref.rootfsPath !== this.#options.rootfsPath) {
+      throw new CaissonError(
+        "SANDBOX_FAILED",
+        "Firecracker restore rootfs path does not match the snapshot backing path",
+      );
+    }
     await this.#assertHostRequirements();
     const guestCid = this.#allocateGuestCid(spec.id);
     const transport: TransportDescriptor = {

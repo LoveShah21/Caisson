@@ -188,11 +188,12 @@ CREATE TABLE snapshots (
   id            UUID PRIMARY KEY,
   kind          TEXT NOT NULL,             -- base | session
   session_id    UUID REFERENCES sessions(id) ON DELETE CASCADE,
-  object_key    TEXT NOT NULL,
-  size_bytes    BIGINT NOT NULL,
-  checksum      TEXT NOT NULL,
-  kernel_ref    TEXT,
-  rootfs_ref    TEXT,
+  bucket        TEXT NOT NULL,
+  manifest_key  TEXT NOT NULL,
+  manifest_version TEXT,
+  manifest_sha256 TEXT NOT NULL,
+  manifest_size_bytes BIGINT NOT NULL,
+  manifest_key_id TEXT NOT NULL,
   built_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   promoted_at   TIMESTAMPTZ,
   expires_at    TIMESTAMPTZ
@@ -200,7 +201,12 @@ CREATE TABLE snapshots (
 CREATE INDEX ON snapshots (kind, promoted_at DESC);
 ```
 
-Base-snapshot promotion is a single transaction updating a pointer row in `settings`, so FR-14 holds without a race.
+Each base snapshot is an immutable signed manifest naming compressed state,
+memory, rootfs, and kernel artifacts with their SHA-256 values and sizes. The manifest
+is stored with SSE and authenticated with a host-held HMAC key. Base-snapshot
+promotion is a single transaction updating a pointer row in `settings`, so
+FR-14 holds without a race. Per-session snapshot retention and encryption are
+separate FR-16 work.
 
 ### 1.8 settings
 

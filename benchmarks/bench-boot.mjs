@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import { basename, dirname } from "node:path";
 import { promisify } from "node:util";
-
+import { EnvManifestKeyProvider, S3BaseSnapshotStore } from "../apps/control-plane/dist/index.js";
 import {
   ContainerDriver,
   FirecrackerDriver,
@@ -84,14 +84,27 @@ async function destroyAndRelease(driver, prepared, transportHost) {
   await transportHost.release(prepared.transport);
 }
 
-function createFirecrackerDriver() {
+async function createFirecrackerDriver(snapshotStore) {
   if (process.env.CAISSON_BENCH_FIRECRACKER !== "1") {
     throw new Error("set CAISSON_BENCH_FIRECRACKER=1 to run the opt-in Firecracker benchmark");
   }
-  const rootfsPath = requiredEnvironment("CAISSON_FIRECRACKER_ROOTFS");
-  if (basename(rootfsPath) !== "m1-dev-probe-rootfs.ext4") {
-    throw new Error("the M-1 Firecracker benchmark requires m1-dev-probe-rootfs.ext4");
+  const configuredRootfsPath = requiredEnvironment("CAISSON_FIRECRACKER_ROOTFS");
+  if (
+    snapshotStore === undefined &&
+    basename(configuredRootfsPath) !== "m1-dev-probe-rootfs.ext4"
+  ) {
+    throw new Error("the local-only M-1 Firecracker benchmark requires m1-dev-probe-rootfs.ext4");
   }
+  if (
+    snapshotStore !== undefined &&
+    basename(configuredRootfsPath) === "m1-dev-probe-rootfs.ext4"
+  ) {
+    throw new Error("the S3 cache-hit benchmark requires an eligible non-M-1-development rootfs");
+  }
+  const rootfsPath =
+    snapshotStore === undefined
+      ? configuredRootfsPath
+      : await snapshotStore.stageBaseRootfs(configuredRootfsPath);
   return new FirecrackerDriver({
     firecrackerPath: requiredEnvironment("CAISSON_FIRECRACKER_BIN"),
     kernelImagePath: requiredEnvironment("CAISSON_FIRECRACKER_KERNEL"),
@@ -100,6 +113,20 @@ function createFirecrackerDriver() {
     snapshotDirectory: requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
     bootArgs: firecrackerBootArgs,
     infrastructureProbe: new VsockInfrastructureProbe(),
+  });
+}
+
+function createSnapshotStore() {
+  if (process.env.CAISSON_BENCH_SNAPSHOT_STORE !== "1") return undefined;
+  return new S3BaseSnapshotStore({
+    endpoint: requiredEnvironment("CAISSON_SNAPSHOT_ENDPOINT"),
+    region: process.env.CAISSON_SNAPSHOT_REGION ?? "us-east-1",
+    accessKeyId: requiredEnvironment("CAISSON_MINIO_USER"),
+    secretAccessKey: requiredEnvironment("CAISSON_MINIO_PASSWORD"),
+    bucket: requiredEnvironment("CAISSON_SNAPSHOT_BUCKET"),
+    cacheDirectory: requiredEnvironment("CAISSON_SNAPSHOT_CACHE_DIR"),
+    cacheMaxBytes: S3BaseSnapshotStore.cacheMaxBytesFromEnvironment(),
+    manifestKeys: EnvManifestKeyProvider.fromEnvironment(),
   });
 }
 
@@ -197,12 +224,16 @@ if (driverName === "container") {
     machine,
   });
 } else {
-  const driver = createFirecrackerDriver();
+  const snapshotStore = createSnapshotStore();
+  const driver = await createFirecrackerDriver(snapshotStore);
   const coldDurations = await measureCreate(driver, "m1-dev-probe");
   results.push({
     driver: "firecracker",
     kind: "cold",
-    source: "local kernel and rootfs; S3 snapshot retrieval is scheduled for M-2",
+    source:
+      snapshotStore === undefined
+        ? "local kernel and rootfs; S3 snapshot retrieval is not measured"
+        : "S3-backed rootfs staged into the verified local cache",
     samples,
     timingModel: "prepare_start_exec_destroy",
     execution: "prepare, start, infrastructure exec(/bin/echo hello), destroy",
@@ -216,6 +247,7 @@ if (driverName === "container") {
   let sourcePrepared;
   let sourceTransportHost;
   let snapshot;
+  let restoreSnapshot;
   try {
     sourceTransportHost = new BenchmarkTransportHost();
     sourcePrepared = await driver.prepare(
@@ -232,11 +264,19 @@ if (driverName === "container") {
   }
 
   try {
-    const warmDurations = await measureRestore(driver, snapshot);
+    restoreSnapshot =
+      snapshotStore === undefined ? snapshot : await snapshotStore.storeBase(snapshot);
+    const warmDurations = await measureRestore(
+      driver,
+      snapshotStore === undefined ? snapshot : await snapshotStore.resolve(restoreSnapshot),
+    );
     results.push({
       driver: "firecracker",
       kind: "warm",
-      source: "local base snapshot",
+      source:
+        snapshotStore === undefined
+          ? "local base snapshot"
+          : "S3 base snapshot resolved from a verified local cache hit",
       samples,
       timingModel: "restore_exec_destroy",
       execution: "restore, infrastructure exec(/bin/echo hello), destroy",
@@ -246,6 +286,9 @@ if (driverName === "container") {
       machine,
     });
   } finally {
+    if (snapshotStore !== undefined && restoreSnapshot !== undefined) {
+      await snapshotStore.release(restoreSnapshot);
+    }
     await Promise.all([
       rm(snapshot.statePath, { force: true }),
       rm(snapshot.memoryPath, { force: true }),

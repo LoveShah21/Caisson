@@ -5,3 +5,5 @@ export * from "./session-identity.js";
 export * from "./session-lifecycle.js";
 export * from "./session-reaper.js";
 export * from "./snapshot-scheduler.js";
+export * from "./snapshot-catalog.js";
+export * from "./snapshot-storage.js";

@@ -25,12 +25,15 @@ FR-1 to FR-7, FR-13 to FR-17, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the po
 **Completion checklist:**
 
 - [ ] Wire every live broker request through `SessionIdentityResolver.resolve(peer)` before policy evaluation, so the broker loads the bound token row and enforces its expiry and revocation state. FR-3.
+- [ ] Complete FR-16 as a separately designed per-session snapshot task. Base-snapshot storage does not persist session state.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
 - INV-1, INV-2, INV-3, INV-5 pass.
 - Forged identity fields in guest requests change nothing.
 - `bench-broker.ts` records overhead against NFR-2.
+
+**M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The invariant test must run on Firecracker in a KVM-capable WSL2/Linux environment as well; an unavailable KVM environment must report an explicit skipped Firecracker case rather than a passing result.
 
 ## M-3. Policy and agent runtime (week 5)
 

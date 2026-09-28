@@ -40,18 +40,22 @@ describe("SessionReaper", () => {
 });
 
 describe("SnapshotScheduler", () => {
-  it("builds and atomically promotes a base snapshot before scheduling session snapshots", async () => {
+  it("builds and atomically promotes only a clean base snapshot", async () => {
     const buildBaseSnapshot = vi.fn(async () => ({
       id: "base",
       kind: "base" as const,
-      statePath: "/snapshots/base.state",
-      memoryPath: "/snapshots/base.memory",
+      manifest: {
+        bucket: "snapshots",
+        key: "base/manifest.json",
+        sha256: "a".repeat(64),
+        sizeBytes: 1,
+      },
+      manifestKeyId: "test-key",
       createdAt: "2026-09-26T12:00:00Z",
     }));
     const promoteBaseSnapshotAtomically = vi.fn();
-    const snapshotActiveSessions = vi.fn();
     const scheduler = new SnapshotScheduler(
-      { buildBaseSnapshot, promoteBaseSnapshotAtomically, snapshotActiveSessions },
+      { buildBaseSnapshot, promoteBaseSnapshotAtomically },
       () => new Date("2026-09-26T12:00:00Z"),
     );
 
@@ -60,10 +64,6 @@ describe("SnapshotScheduler", () => {
     expect(buildBaseSnapshot).toHaveBeenCalledOnce();
     expect(promoteBaseSnapshotAtomically).toHaveBeenCalledWith(
       expect.objectContaining({ id: "base" }),
-    );
-    expect(snapshotActiveSessions).toHaveBeenCalledOnce();
-    expect(promoteBaseSnapshotAtomically.mock.invocationCallOrder[0]).toBeLessThan(
-      snapshotActiveSessions.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 });

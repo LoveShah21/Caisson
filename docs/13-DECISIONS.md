@@ -262,3 +262,25 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** `websocketUrl` is a routing location returned by session creation, not a credential. The current API contract names websocket frames and says that the REST approval decision endpoint requires an authenticated approver, but it does not define a websocket authentication handshake or how the REST endpoint derives the approver identity. An unauthenticated approval channel would violate the approval trust boundary.
 
 **Consequences:** M-4 must choose and document an authentication mechanism before implementing the websocket hub or approval decision endpoint. Until then, both endpoints must reject unauthenticated connections and decisions by default. The session URL alone must never grant subscription or decision authority.
+
+---
+
+## ADR-23: Base snapshots use signed manifests and storage-layer encryption
+**Status:** accepted
+
+**Alternatives:** Trust object-store metadata alone; store local paths in `SnapshotRef`; use application-level envelope encryption in M-2.
+
+**Reasoning:** A Firecracker snapshot has multiple artifacts and a restored guest is unsafe if any one is stale, truncated, or modified. A signed manifest with artifact hashes and sizes provides a single immutable restore reference. M-2 uses object-store SSE because Caisson does not yet own key management. Application-level encryption and per-session snapshot keys need a separate design.
+
+**Consequences:** `SnapshotRef` identifies an immutable manifest object, not host paths. The manifest includes compressed state, memory, rootfs, and kernel artifacts, a rotation key id, and an HMAC from a host-held `ManifestKeyProvider`; M-2 provides only a required environment implementation. Uploads request SSE and verify stored encryption metadata. Downloads verify into a temporary cache directory before atomic rename. Base snapshots are built from a clean boot without session input or agent work. FR-16 remains a separate M-2 task and is not implemented by this base-snapshot slice.
+
+---
+
+## ADR-24: Snapshot restore entropy reseeding is unresolved
+**Status:** proposed
+
+**Alternatives:** Assume the guest kernel or agent runtime reseeds automatically after restore; permit restored guests to generate security-sensitive randomness unchanged.
+
+**Reasoning:** The current M-1 guest probe has no RNG reseed path and the Firecracker driver does not configure a virtual entropy device. Restoring a memory snapshot can therefore resume identical guest RNG state. This is not safe to assume away.
+
+**Consequences:** The M-1 development probe remains ineligible for promoted base snapshots. Before a production guest snapshot is restored into an agent session, the guest runtime or a trusted host-to-guest mechanism must reseed entropy and be tested. Per-session snapshot design must include this requirement.

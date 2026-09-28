@@ -105,11 +105,11 @@ Steps 4 through 10 happen before any secret is touched. That ordering is a requi
 | Direct completion write unavailable after execution | Append to the durable completion buffer and retry; never discard the record or misreport the external effect |
 | Downstream service timeout | Fail with `SERVICE_TIMEOUT`, logged, retryable by the agent |
 | Approval timeout | Fail with `APPROVAL_TIMEOUT` |
-| Sandbox crash | Resume from last mid-session snapshot, agent told the truth about the gap |
+| Sandbox crash | Terminate the affected session. Mid-session recovery is deferred with FR-16. |
 | Broker crash | All sessions on that host terminate. Durable buffered completions are reconciled on restart; unmatched starts are flagged as orphaned. |
 
 Every one of these is a fail-closed decision. There is no configuration flag that makes any of them fail open, and there should never be one.
 
 ## 6. Deployment
 
-Single control plane, one or more sandbox hosts, Postgres, Redis, ClickHouse, MinIO or S3, an OTel collector, Grafana. `deploy/docker-compose.yml` brings up dependencies plus the control plane with the container driver for local work. `deploy/terraform/` provisions a KVM-capable host for the real thing.
+Single control plane, one or more sandbox hosts, Postgres, Redis, ClickHouse, MinIO or S3, an OTel collector, Grafana. `deploy/docker-compose.yml` brings up dependencies plus the control plane with the container driver for local work. Its MinIO static KMS setting is development-only. Production uses platform SSE-KMS. `deploy/terraform/` provisions a KVM-capable host for the real thing.
