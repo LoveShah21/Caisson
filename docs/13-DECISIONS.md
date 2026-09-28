@@ -317,3 +317,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** A structured, adapter-discriminated credential prevents URI parsing ambiguity and makes TLS posture explicit. A redacting secret wrapper reduces accidental disclosure through normal logging and inspection paths, but does not replace the prohibition on logging secrets. Credential references originate in trusted control-plane data, yet Vault paths still require strict validation because an incorrect path could cross a secret boundary.
 
 **Consequences:** M-2 Postgres credentials are `{ host, port, database, username, password, sslMode }`, with `verify-full` as the default, `require` allowed, and `disable` limited to development. Values are fetched per call or held only in a bounded in-memory TTL and are never durable. Vault uses `VAULT_ADDR` and `VAULT_TOKEN`, KV-v2, request timeouts, HTTPS outside development, and paths constrained below the configured mount prefix. Production must replace the token with AppRole or platform authentication using short-lived credentials and a Vault policy limited to the Caisson path.
+
+---
+
+## ADR-28: Build the development MinIO image from a pinned upstream source commit
+**Status:** accepted
+
+**Alternatives:** Continue relying on an unavailable Quay or Docker Hub image; download an unverified MinIO binary; postpone snapshot-store integration tests.
+
+**Reasoning:** On 2026-09-29, Quay returned 401 for the prior pinned image, Docker Hub denied anonymous pulls for both prior and current MinIO tags, and MinIO's binary download endpoints returned HTTP 410. The official MinIO release directs container users to build from source. Caisson therefore pins the release commit, verifies the checkout's `HEAD` during the Docker build, pins the Go toolchain, and uses `go build -mod=readonly` so module content is verified against the source release's `go.sum`.
+
+**Consequences:** `deploy/minio/image.env` is the one image reference used by Compose, Testcontainers, and CI. The detailed provenance record names the checked upstream tag and commit and documents unavailable verification paths. This is not a complete supply-chain solution: the Go module proxy and base image remain external dependencies. M-2 tracks a later decision for an image mirror or freshness check because pinned-image disappearance has affected two registries.

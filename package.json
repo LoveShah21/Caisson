@@ -10,6 +10,7 @@
   "scripts": {
     "build": "turbo run build",
     "bootstrap:policy": "node scripts/bootstrap-policy.mjs",
+    "build:minio": "node scripts/build-minio-image.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:runtime-versions": "node scripts/check-runtime-versions.mjs",
     "format": "biome format --write .",

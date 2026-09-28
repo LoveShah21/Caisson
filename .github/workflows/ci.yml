@@ -50,5 +50,8 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Build local MinIO image
+        run: pnpm build:minio
+
       - name: Test
         run: pnpm test

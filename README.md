@@ -26,7 +26,7 @@ Set generated values in `.env` before starting Compose.
 
 ```bash
 pnpm install
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env --env-file deploy/minio/image.env -f deploy/docker-compose.yml up -d
 pnpm bootstrap:policy
 ```
 

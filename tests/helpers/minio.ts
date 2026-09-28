@@ -1,4 +1,19 @@
+import { readFileSync } from "node:fs";
+
 import { GenericContainer, Wait } from "testcontainers";
+
+const imageConfiguration = readFileSync(
+  new URL("../../deploy/minio/image.env", import.meta.url),
+  "utf8",
+);
+const minioImage = imageConfiguration
+  .split(/\r?\n/u)
+  .find((line) => line.startsWith("CAISSON_MINIO_IMAGE="))
+  ?.slice("CAISSON_MINIO_IMAGE=".length);
+
+if (minioImage === undefined || minioImage.length === 0) {
+  throw new Error("deploy/minio/image.env must define CAISSON_MINIO_IMAGE");
+}
 
 export interface MinioFixture {
   readonly endpoint: string;
@@ -11,7 +26,7 @@ export async function createMinioFixture(): Promise<MinioFixture> {
   const accessKeyId = "caisson";
   const secretAccessKey = "caisson-minio-test-only";
   const staticKey = Buffer.alloc(32, 7).toString("base64");
-  const container = await new GenericContainer("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+  const container = await new GenericContainer(minioImage)
     .withEnvironment({
       MINIO_ROOT_USER: accessKeyId,
       MINIO_ROOT_PASSWORD: secretAccessKey,
