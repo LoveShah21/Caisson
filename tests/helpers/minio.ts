@@ -11,7 +11,7 @@ export async function createMinioFixture(): Promise<MinioFixture> {
   const accessKeyId = "caisson";
   const secretAccessKey = "caisson-minio-test-only";
   const staticKey = Buffer.alloc(32, 7).toString("base64");
-  const container = await new GenericContainer("minio/minio:RELEASE.2025-09-07T16-13-09Z")
+  const container = await new GenericContainer("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
     .withEnvironment({
       MINIO_ROOT_USER: accessKeyId,
       MINIO_ROOT_PASSWORD: secretAccessKey,

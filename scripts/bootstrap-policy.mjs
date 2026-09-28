@@ -100,10 +100,12 @@ function runOpaBuild(outputDirectory) {
       "/out/default.tar.gz",
       "/src/default.rego",
     ],
-    { cwd: repositoryRoot, stdio: "inherit" },
+    { cwd: repositoryRoot, encoding: "utf8", stdio: "pipe" },
   );
   if (result.status !== 0) {
-    throw new Error("OPA policy compilation failed");
+    throw new Error(
+      `OPA policy compilation failed: ${result.stderr || result.stdout || result.error?.message || "unknown Docker failure"}`,
+    );
   }
 }
 
