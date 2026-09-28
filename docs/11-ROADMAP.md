@@ -22,6 +22,10 @@ FR-8 to FR-12. `IsolationDriver`, both implementations, driver-level snapshot bu
 
 FR-1 to FR-7, FR-13 to FR-17, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, snapshot scheduling and storage, vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
 
+**Completion checklist:**
+
+- [ ] Wire every live broker request through `SessionIdentityResolver.resolve(peer)` before policy evaluation, so the broker loads the bound token row and enforces its expiry and revocation state. FR-3.
+
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
 - INV-1, INV-2, INV-3, INV-5 pass.

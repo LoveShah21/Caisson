@@ -251,3 +251,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** Revoking the token is a small idempotent database operation that removes authorization before a potentially slow or failing sandbox destroy. A binding cannot be released while destroy is unconfirmed because a still-live sandbox could retain or regain a host identity. Coarse failure reasons are sufficient for lifecycle state and avoid storing host or driver detail in an operator API response.
 
 **Consequences:** Start failure and delete attempt revoke, destroy, then release. A revoke failure never skips destroy, but release is permitted only after both revoke and destroy are confirmed. A revoke, destroy, or release failure marks the session `failed` with `cleanup_pending` and leaves the binding reserved for reconciliation. The reconciler retries all incomplete cleanup steps idempotently, with a per-session Postgres advisory lock so separate control-plane instances cannot process the same session concurrently. The control plane reconciles stale booting sessions at startup and periodically. Lifecycle state changes append durable outbox events.
+
+---
+
+## ADR-22: Define approver authentication before the M-4 websocket hub
+**Status:** proposed
+
+**Alternatives:** Treat the session event URL as a bearer credential; accept unauthenticated websocket connections; infer an approver from a client-supplied field.
+
+**Reasoning:** `websocketUrl` is a routing location returned by session creation, not a credential. The current API contract names websocket frames and says that the REST approval decision endpoint requires an authenticated approver, but it does not define a websocket authentication handshake or how the REST endpoint derives the approver identity. An unauthenticated approval channel would violate the approval trust boundary.
+
+**Consequences:** M-4 must choose and document an authentication mechanism before implementing the websocket hub or approval decision endpoint. Until then, both endpoints must reject unauthenticated connections and decisions by default. The session URL alone must never grant subscription or decision authority.
