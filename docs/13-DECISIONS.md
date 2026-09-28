@@ -272,15 +272,37 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** A Firecracker snapshot has multiple artifacts and a restored guest is unsafe if any one is stale, truncated, or modified. A signed manifest with artifact hashes and sizes provides a single immutable restore reference. M-2 uses object-store SSE because Caisson does not yet own key management. Application-level encryption and per-session snapshot keys need a separate design.
 
-**Consequences:** `SnapshotRef` identifies an immutable manifest object, not host paths. The manifest includes compressed state, memory, rootfs, and kernel artifacts, a rotation key id, and an HMAC from a host-held `ManifestKeyProvider`; M-2 provides only a required environment implementation. Uploads request SSE and verify stored encryption metadata. Downloads verify into a temporary cache directory before atomic rename. Base snapshots are built from a clean boot without session input or agent work. FR-16 remains a separate M-2 task and is not implemented by this base-snapshot slice.
+**Consequences:** `SnapshotRef` identifies an immutable manifest object, not host paths. The manifest includes compressed state, memory, rootfs, and kernel artifacts, a rotation key id, and an HMAC from a host-held `ManifestKeyProvider`; M-2 provides only a required environment implementation. Uploads request SSE and verify stored encryption metadata. Downloads verify into a temporary cache directory before atomic rename. Base snapshots are built from a clean boot without session input or agent work. Per-session snapshots are deferred to M-3 by ADR-26.
 
 ---
 
-## ADR-24: Snapshot restore entropy reseeding is unresolved
-**Status:** proposed
+## ADR-24: A restored guest requires confirmed fresh entropy before readiness
+**Status:** accepted
 
 **Alternatives:** Assume the guest kernel or agent runtime reseeds automatically after restore; permit restored guests to generate security-sensitive randomness unchanged.
 
-**Reasoning:** The current M-1 guest probe has no RNG reseed path and the Firecracker driver does not configure a virtual entropy device. Restoring a memory snapshot can therefore resume identical guest RNG state. This is not safe to assume away.
+**Reasoning:** The current M-1 guest probe has no RNG reseed path and the Firecracker driver does not configure a virtual entropy device. Restoring a memory snapshot can therefore resume identical guest RNG state. This is not safe to assume away. Firecracker VMGenID may help a supporting Linux kernel reseed its kernel CRNG, but it is not sufficient until Caisson pins and verifies the Firecracker and guest-kernel versions, eliminates the resume race, and proves the required output distinction. User-space state also requires separate consideration.
 
-**Consequences:** The M-1 development probe remains ineligible for promoted base snapshots. Before a production guest snapshot is restored into an agent session, the guest runtime or a trusted host-to-guest mechanism must reseed entropy and be tested. Per-session snapshot design must include this requirement.
+**Consequences:** The M-1 development probe remains ineligible for promoted base snapshots. A restored guest must remain not-ready until a trusted entropy-refresh mechanism completes and confirms success. KVM-capable Firecracker testing must restore two guests from one snapshot and show different `getrandom`/`urandom` output; environments without KVM explicitly skip this case. No warm-restored guest may serve a real session before that test passes. Per-session snapshot design must include this requirement.
+
+---
+
+## ADR-25: A shared base rootfs is immutable; writable session state is per-VM
+**Status:** accepted
+
+**Alternatives:** Mount one writable rootfs backing file in multiple restored guests; copy or mutate the cached base rootfs for each session.
+
+**Reasoning:** Firecracker snapshots require their backing rootfs at the original host path. The verified cache therefore stages one immutable backing artifact at a stable path. Sharing writable filesystem state between sessions would violate INV-7 and allow cross-session persistence. The M-1 probe is the only writable-root exception, and it is structurally ineligible for production and promoted snapshots.
+
+**Consequences:** Every eligible base rootfs is mounted read-only. M-2 implements no writable per-session filesystem layer and must not start real sessions from a shared writable rootfs. M-3 must select and review a per-VM writable layer, such as a unique overlay or tmpfs workspace, before the runtime can write session state. The shared cache entry remains immutable throughout its use.
+
+---
+
+## ADR-26: Move per-session snapshots from M-2 to M-3
+**Status:** accepted
+
+**Alternatives:** Implement FR-16 alongside clean base snapshots in M-2.
+
+**Reasoning:** Per-session snapshots depend on the eligible runtime rootfs, confirmed restore entropy handling, session-scoped encryption, explicit retention/deletion, and a restore model that preserves INV-7. Those security properties are not specified or implemented by the base-snapshot storage slice.
+
+**Consequences:** M-2 implements clean base snapshots only. FR-16 moves to M-3 and blocks M-3 closure until its design and tests are complete. FR-17 remains specified in M-2, but its mid-session-resume behaviour cannot be exercised until FR-16 exists; its final milestone assignment requires clarification.
