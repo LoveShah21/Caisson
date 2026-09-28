@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,9 @@ const databaseUrl =
 const source = await readFile(sourcePath, "utf8");
 const sourceHash = createHash("sha256").update(source).digest("hex");
 const outputDirectory = await mkdtemp(join(tmpdir(), "caisson-policy-bootstrap-"));
+// The pinned OPA image runs as a non-root user. Docker bind mounts retain host
+// ownership, so grant that isolated temporary directory write permission only.
+await chmod(outputDirectory, 0o777);
 const bundlePath = join(outputDirectory, "default.tar.gz");
 
 try {
