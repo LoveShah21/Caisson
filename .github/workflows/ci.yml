@@ -35,6 +35,9 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: Check pinned Firecracker runtime versions
+        run: pnpm check:runtime-versions
+
       - name: Test policy source
         run: pnpm policy:test
 

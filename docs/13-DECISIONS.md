@@ -283,7 +283,7 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** The current M-1 guest probe has no RNG reseed path and the Firecracker driver does not configure a virtual entropy device. Restoring a memory snapshot can therefore resume identical guest RNG state. This is not safe to assume away. Firecracker VMGenID may help a supporting Linux kernel reseed its kernel CRNG, but it is not sufficient until Caisson pins and verifies the Firecracker and guest-kernel versions, eliminates the resume race, and proves the required output distinction. User-space state also requires separate consideration.
 
-**Consequences:** The M-1 development probe remains ineligible for promoted base snapshots. A restored guest must remain not-ready until a trusted entropy-refresh mechanism completes and confirms success. KVM-capable Firecracker testing must restore two guests from one snapshot and show different `getrandom`/`urandom` output; environments without KVM explicitly skip this case. No warm-restored guest may serve a real session before that test passes. Per-session snapshot design must include this requirement.
+**Consequences:** The M-1 development probe remains ineligible for promoted base snapshots. The Firecracker and guest-kernel pair is pinned in `deploy/runtime-versions.env` and checked in CI; changing it requires a fresh entropy verification. A restored guest must remain not-ready until a trusted entropy-refresh mechanism completes and confirms success. KVM-capable Firecracker testing must restore two guests from one snapshot and show different `getrandom`/`urandom` output; environments without KVM explicitly skip this case. No warm-restored guest may serve a real session before that test passes. Per-session snapshot design must include this requirement.
 
 ---
 
@@ -305,4 +305,15 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** Per-session snapshots depend on the eligible runtime rootfs, confirmed restore entropy handling, session-scoped encryption, explicit retention/deletion, and a restore model that preserves INV-7. Those security properties are not specified or implemented by the base-snapshot storage slice.
 
-**Consequences:** M-2 implements clean base snapshots only. FR-16 moves to M-3 and blocks M-3 closure until its design and tests are complete. FR-17 remains specified in M-2, but its mid-session-resume behaviour cannot be exercised until FR-16 exists; its final milestone assignment requires clarification.
+**Consequences:** M-2 implements clean base snapshots only. FR-16 moves to M-3 and blocks M-3 closure until its design and tests are complete. FR-17a stays in M-2 as the restore-readiness requirement; FR-17b moves with FR-16 to M-3.
+
+---
+
+## ADR-27: Credentials are structured, redacting, and backend paths are constrained
+**Status:** accepted
+
+**Alternatives:** Pass a connection URI to adapters; keep raw strings in a generic credential map; let Vault read arbitrary paths; use a long-lived production Vault token without transport restrictions.
+
+**Reasoning:** A structured, adapter-discriminated credential prevents URI parsing ambiguity and makes TLS posture explicit. A redacting secret wrapper reduces accidental disclosure through normal logging and inspection paths, but does not replace the prohibition on logging secrets. Credential references originate in trusted control-plane data, yet Vault paths still require strict validation because an incorrect path could cross a secret boundary.
+
+**Consequences:** M-2 Postgres credentials are `{ host, port, database, username, password, sslMode }`, with `verify-full` as the default, `require` allowed, and `disable` limited to development. Values are fetched per call or held only in a bounded in-memory TTL and are never durable. Vault uses `VAULT_ADDR` and `VAULT_TOKEN`, KV-v2, request timeouts, HTTPS outside development, and paths constrained below the configured mount prefix. Production must replace the token with AppRole or platform authentication using short-lived credentials and a Vault policy limited to the Caisson path.

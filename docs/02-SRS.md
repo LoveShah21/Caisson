@@ -42,7 +42,8 @@ See `14-GLOSSARY.md`. Key terms used below: session, sandbox, broker, adapter, s
 - **FR-14** Snapshot promotion must be atomic. Sessions already booting or running must continue against the snapshot they started with.
 - **FR-15** Snapshots must be stored in an S3-compatible store, compressed, and cached on local disk with an LRU policy.
 - **FR-16** Mid-session snapshots must be taken every five minutes while a session is active.
-- **FR-17** On resume from a mid-session snapshot the agent must be informed truthfully of the suspension point. The system must not silently replay or fabricate continuity. A guest restored from any snapshot must not become ready or serve a real session until fresh entropy has been mixed into the guest and confirmation has been received. The implementation must prove, on KVM-capable Firecracker coverage, that two guests restored from the same snapshot produce distinct `getrandom`/`urandom` output. An unavailable KVM environment must report this case as explicitly skipped, never passed.
+- **FR-17a** A guest restored from any snapshot must not become ready or serve a real session until fresh entropy has been mixed into the guest and confirmation has been received. The implementation must prove, on KVM-capable Firecracker coverage, that two guests restored from the same snapshot produce distinct `getrandom`/`urandom` output. The guest agent must hold no keys, tokens, or seeded PRNG state when a snapshot is taken. An unavailable KVM environment must report this case as explicitly skipped, never passed.
+- **FR-17b** On resume from a mid-session snapshot the agent must be informed truthfully of the suspension point. The system must not silently replay or fabricate continuity.
 
 ### 3.4 Broker
 

@@ -10,11 +10,11 @@ import type {
   ExecRequest,
   ExecResult,
   IsolationDriver,
+  LocalSnapshot,
   PreparedSandbox,
+  ResolvedSnapshot,
   SandboxHandle,
   SandboxSpec,
-  LocalSnapshot,
-  ResolvedSnapshot,
   TransportDescriptor,
   TransportHost,
 } from "./types.js";

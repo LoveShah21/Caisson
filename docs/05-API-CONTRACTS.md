@@ -248,10 +248,35 @@ interface SecretBackend {
   health(): Promise<boolean>;
 }
 
+type Credentials = PostgresCredentials;
+
+interface PostgresCredentials {
+  kind: 'postgres';
+  host: string;
+  port: number;
+  database: string;
+  username: SecretString;
+  password: SecretString;
+  sslMode: 'verify-full' | 'require' | 'disable'; // disable is development-only
+}
+
+interface CredentialRef {
+  backend: 'env' | 'vault';
+  backendPath: string;
+  role: string;
+}
+
 interface Redactor {
   redact(value: unknown, sessionId: string): { value: unknown; count: number };
 }
 ```
+
+Credentials are structured, discriminated by adapter kind, and exist only in
+memory. Secret values use a wrapper whose string, JSON, and inspection forms
+are `[redacted]`. The env backend reads one JSON credential document from an
+environment variable named by `backendPath`. The Vault backend reads a KV-v2
+document at a validated path beneath its configured mount prefix. Vault uses
+`VAULT_ADDR` and `VAULT_TOKEN`; HTTPS is mandatory outside development.
 
 For the container driver, `endpointPath` is the same random absolute Unix-socket
 path as `peerIdentifier`, and `TransportHost` creates the listener. For the
