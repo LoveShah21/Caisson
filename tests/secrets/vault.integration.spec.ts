@@ -26,6 +26,10 @@ beforeAll(async () => {
         database: "warehouse",
         username: "caisson",
         password: "vault-integration-secret",
+        readCredentials: {
+          username: "caisson-reader",
+          password: "vault-reader-integration-secret",
+        },
         sslMode: "verify-full",
       },
     }),

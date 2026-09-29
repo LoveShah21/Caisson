@@ -28,6 +28,7 @@ FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 - [ ] Do not claim an S3 cache-hit warm-restore result until the eligible runtime rootfs exists and the cache-hit benchmark has run on KVM.
 - [ ] Run the Firecracker case of INV-7 in KVM-capable WSL2/Linux using an eligible non-M-1 runtime rootfs. Until then it remains an explicit skip.
 - [ ] Define a long-term third-party image supply-chain control, such as a private mirror or freshness check. Two unrelated public registries have stopped serving pinned images during M-2.
+- [ ] Evaluate a PostgreSQL parser for deferred EXPLAIN support against the SELECT bypass suite and maintenance/coverage criteria. M-2 denies EXPLAIN.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.

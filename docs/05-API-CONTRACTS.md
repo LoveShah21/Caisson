@@ -257,6 +257,10 @@ interface PostgresCredentials {
   database: string;
   username: SecretString;
   password: SecretString;
+  readCredentials: {
+    username: SecretString;
+    password: SecretString;
+  };
   sslMode: 'verify-full' | 'require' | 'disable'; // disable is development-only
 }
 

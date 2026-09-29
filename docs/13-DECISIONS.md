@@ -328,3 +328,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** On 2026-09-29, Quay returned 401 for the prior pinned image, Docker Hub denied anonymous pulls for both prior and current MinIO tags, and MinIO's binary download endpoints returned HTTP 410. The official MinIO release directs container users to build from source. Caisson therefore pins the release commit, verifies the checkout's `HEAD` during the Docker build, pins the Go toolchain, and uses `go build -mod=readonly` so module content is verified against the source release's `go.sum`.
 
 **Consequences:** `deploy/minio/image.env` is the one image reference used by Compose, Testcontainers, and CI. The detailed provenance record names the checked upstream tag and commit and documents unavailable verification paths. This is not a complete supply-chain solution: the Go module proxy and base image remain external dependencies. M-2 tracks a later decision for an image mirror or freshness check because pinned-image disappearance has affected two registries.
+
+---
+
+## ADR-29: M-2 PostgreSQL queries permit SELECT only
+**Status:** accepted
+
+**Alternatives:** Add EXPLAIN support with the current parser; add a new SQL parser dependency under M-2 delivery pressure.
+
+**Reasoning:** The current parser rejects EXPLAIN syntax. Allowing it through a prefix check would violate ADR-5. The parser is a security boundary, so M-2 must not add a parser dependency reactively for a convenience feature. M-2 therefore explicitly denies EXPLAIN and permits one parsed SELECT only. Read calls use separate read credentials with database SELECT-only grants, so the database remains a second enforcement layer if adapter validation is bypassed.
+
+**Consequences:** EXPLAIN support is a later reviewed task. It must select a parser deliberately and prove compatibility with the SELECT bypass suite, maintenance, and coverage criteria. `readCredentials` use the same redacting secret path as write credentials and must have no INSERT, UPDATE, DELETE, or DDL grants.

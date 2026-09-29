@@ -8,6 +8,10 @@ const document = JSON.stringify({
   database: "warehouse",
   username: "caisson",
   password: "known-test-secret",
+  readCredentials: {
+    username: "caisson-reader",
+    password: "known-reader-test-secret",
+  },
   sslMode: "verify-full",
 });
 

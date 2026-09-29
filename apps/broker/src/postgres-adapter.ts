@@ -26,10 +26,35 @@ export interface AdapterMethod {
 export interface CallContext {
   readonly timeoutMs: number;
 }
+export interface PostgresAdapterConfig {
+  readonly statementTimeoutMs: number;
+  readonly rowLimit: number;
+  readonly resultSizeBytes: number;
+}
+export interface QueryResult {
+  readonly rows: readonly Record<string, unknown>[];
+  readonly truncated: boolean;
+}
 
 export class PostgresAdapter {
   readonly name = "postgres";
   readonly #clients = new Map<string, Sql>();
+  readonly #config: PostgresAdapterConfig;
+
+  constructor(config: PostgresAdapterConfig) {
+    if (config === undefined || config === null || typeof config !== "object") {
+      throw new CaissonError("PARAMS_INVALID", "postgres adapter limits are required");
+    }
+    for (const value of [config.statementTimeoutMs, config.rowLimit, config.resultSizeBytes]) {
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new CaissonError(
+          "PARAMS_INVALID",
+          "postgres adapter limits must be positive integers",
+        );
+      }
+    }
+    this.#config = config;
+  }
 
   readonly methods: Readonly<Record<"query" | "execute", AdapterMethod>> = {
     query: {
@@ -64,9 +89,23 @@ export class PostgresAdapter {
     if (!input.success) throw new CaissonError("PARAMS_INVALID", "invalid postgres parameters");
     assertReadOnlyStatement(input.data.sql);
     return this.#withinTimeout(context.timeoutMs, async () =>
-      this.#client(credentials).begin(async (transaction) => {
+      this.#client(credentials, true).begin(async (transaction) => {
         await transaction.unsafe("SET TRANSACTION READ ONLY");
-        return transaction.unsafe(input.data.sql, input.data.parameters);
+        await transaction.unsafe(
+          `SET LOCAL statement_timeout = ${this.#config.statementTimeoutMs}`,
+        );
+        const rows = await transaction.unsafe(
+          `SELECT * FROM (${input.data.sql}) AS caisson_limited LIMIT ${this.#config.rowLimit + 1}`,
+          input.data.parameters,
+        );
+        const result: QueryResult = {
+          rows: rows.slice(0, this.#config.rowLimit),
+          truncated: rows.length > this.#config.rowLimit,
+        };
+        if (Buffer.byteLength(JSON.stringify(result)) > this.#config.resultSizeBytes) {
+          throw new CaissonError("SERVICE_ERROR", "postgres result exceeds configured size limit");
+        }
+        return result;
       }),
     );
   }
@@ -79,21 +118,24 @@ export class PostgresAdapter {
     const input = SqlParamsSchema.safeParse(params);
     if (!input.success) throw new CaissonError("PARAMS_INVALID", "invalid postgres parameters");
     assertOneStatement(input.data.sql);
+    assertDmlStatement(input.data.sql);
     return this.#withinTimeout(context.timeoutMs, async () =>
       this.#client(credentials).unsafe(input.data.sql, input.data.parameters),
     );
   }
 
-  #client(credentials: PostgresCredentials): Sql {
-    const key = `${credentials.host}:${credentials.port}/${credentials.database}:${credentials.username.reveal()}:${credentials.sslMode}`;
+  #client(credentials: PostgresCredentials, readOnly = false): Sql {
+    const username = readOnly ? credentials.readCredentials.username : credentials.username;
+    const password = readOnly ? credentials.readCredentials.password : credentials.password;
+    const key = `${credentials.host}:${credentials.port}/${credentials.database}:${username.reveal()}:${credentials.sslMode}`;
     const existing = this.#clients.get(key);
     if (existing !== undefined) return existing;
     const client = postgres({
       host: credentials.host,
       port: credentials.port,
       database: credentials.database,
-      username: credentials.username.reveal(),
-      password: credentials.password.reveal(),
+      username: username.reveal(),
+      password: password.reveal(),
       ssl:
         credentials.sslMode === "disable"
           ? false
@@ -132,10 +174,38 @@ function summarise(params: unknown): string {
 }
 
 function assertReadOnlyStatement(sql: string): void {
+  if (/^\s*explain\b/iu.test(sql)) {
+    throw new CaissonError("SCOPE_DENIED", "postgres EXPLAIN is not supported in M-2");
+  }
   const statement = assertOneStatement(sql);
-  if (!isReadOnlyStatement(statement)) {
+  if (!isReadOnlyStatement(statement) || hasSideEffectingFunction(statement)) {
     throw new CaissonError("SCOPE_DENIED", "postgres query accepts one read-only statement");
   }
+}
+
+function assertDmlStatement(sql: string): void {
+  const statement = assertOneStatement(sql) as { type?: unknown };
+  if (statement.type !== "insert" && statement.type !== "update" && statement.type !== "delete") {
+    throw new CaissonError(
+      "SCOPE_DENIED",
+      "postgres execute accepts INSERT, UPDATE, or DELETE only",
+    );
+  }
+}
+
+function hasSideEffectingFunction(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) return value.some(hasSideEffectingFunction);
+  const record = value as Record<string, unknown>;
+  const name = (record["function"] as { name?: unknown } | undefined)?.name;
+  if (
+    record["type"] === "call" &&
+    typeof name === "string" &&
+    /^(pg_terminate_backend|nextval|pg_sleep|lo_import|dblink(?:_|$))/iu.test(name)
+  ) {
+    return true;
+  }
+  return Object.values(record).some(hasSideEffectingFunction);
 }
 
 function assertOneStatement(sql: string): unknown {

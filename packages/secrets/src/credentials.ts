@@ -40,6 +40,7 @@ export interface PostgresCredentials {
   readonly username: SecretString;
   readonly password: SecretString;
   readonly sslMode: SslMode;
+  readonly readCredentials: { readonly username: SecretString; readonly password: SecretString };
 }
 
 export type Credentials = PostgresCredentials;
@@ -52,6 +53,9 @@ const StoredPostgresCredentialsSchema = z
     database: z.string().min(1),
     username: z.string().min(1),
     password: z.string().min(1),
+    readCredentials: z
+      .object({ username: z.string().min(1), password: z.string().min(1) })
+      .strict(),
     sslMode: SslModeSchema.default("verify-full"),
   })
   .strict();
@@ -68,6 +72,10 @@ export function parseCredentials(value: unknown, environment: string | undefined
     database: parsed.data.database,
     username: new SecretString(parsed.data.username),
     password: new SecretString(parsed.data.password),
+    readCredentials: {
+      username: new SecretString(parsed.data.readCredentials.username),
+      password: new SecretString(parsed.data.readCredentials.password),
+    },
     sslMode: parsed.data.sslMode,
   };
 }
