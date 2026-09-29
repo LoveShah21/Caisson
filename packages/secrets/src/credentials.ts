@@ -43,7 +43,13 @@ export interface PostgresCredentials {
   readonly readCredentials: { readonly username: SecretString; readonly password: SecretString };
 }
 
-export type Credentials = PostgresCredentials;
+export interface S3Credentials {
+  readonly kind: "s3";
+  readonly accessKeyId: SecretString;
+  readonly secretAccessKey: SecretString;
+}
+
+export type Credentials = PostgresCredentials | S3Credentials;
 
 const StoredPostgresCredentialsSchema = z
   .object({
@@ -60,9 +66,32 @@ const StoredPostgresCredentialsSchema = z
   })
   .strict();
 
+const StoredS3CredentialsSchema = z
+  .object({
+    kind: z.literal("s3"),
+    accessKeyId: z.string().min(1),
+    secretAccessKey: z.string().min(1),
+  })
+  .strict();
+
+const StoredCredentialsSchema = z.discriminatedUnion("kind", [
+  StoredPostgresCredentialsSchema,
+  StoredS3CredentialsSchema,
+]);
+
 export function parseCredentials(value: unknown, environment: string | undefined): Credentials {
-  const parsed = StoredPostgresCredentialsSchema.safeParse(value);
-  if (!parsed.success || (parsed.data.sslMode === "disable" && environment === "production")) {
+  const parsed = StoredCredentialsSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new CaissonError("SECRET_UNAVAILABLE", "credential unavailable");
+  }
+  if (parsed.data.kind === "s3") {
+    return {
+      kind: "s3",
+      accessKeyId: new SecretString(parsed.data.accessKeyId),
+      secretAccessKey: new SecretString(parsed.data.secretAccessKey),
+    };
+  }
+  if (parsed.data.sslMode === "disable" && environment === "production") {
     throw new CaissonError("SECRET_UNAVAILABLE", "credential unavailable");
   }
   return {

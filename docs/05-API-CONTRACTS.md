@@ -237,10 +237,10 @@ interface ServiceAdapter {
 
 interface AdapterMethod {
   params: ZodSchema;
-  scopeRequired: string;
-  sideEffecting: boolean;
+  scopeRequired: string | ((params: unknown) => string);
+  sideEffecting: boolean | ((params: unknown) => boolean);
   summarise(params: unknown): string;          // the human sentence used in approvals
-  execute(creds: Credentials, params: unknown, ctx: CallContext): Promise<unknown>;
+  execute(creds: Credentials | undefined, params: unknown, ctx: CallContext): Promise<unknown>;
 }
 
 interface SecretBackend {
@@ -248,7 +248,7 @@ interface SecretBackend {
   health(): Promise<boolean>;
 }
 
-type Credentials = PostgresCredentials;
+type Credentials = PostgresCredentials | S3Credentials;
 
 interface PostgresCredentials {
   kind: 'postgres';
@@ -262,6 +262,12 @@ interface PostgresCredentials {
     password: SecretString;
   };
   sslMode: 'verify-full' | 'require' | 'disable'; // disable is development-only
+}
+
+interface S3Credentials {
+  kind: 's3';
+  accessKeyId: SecretString;
+  secretAccessKey: SecretString;
 }
 
 interface CredentialRef {
@@ -294,3 +300,20 @@ that host, so a restarted broker must establish new live transport rather than
 recovering an old endpoint.
 
 `summarise` is on the adapter for a reason: only the adapter knows how to turn its own parameters into a sentence a human can judge.
+
+The HTTP adapter exposes `request({ url, method, headers?, body? })`. `body`,
+when supplied, is `{ encoding: 'utf8' | 'base64', data: string }`. It maps
+`GET`, `HEAD`, and `OPTIONS` to `http.read`, and `POST`, `PUT`, `PATCH`, and
+`DELETE` to `http.write`; all other methods fail closed. `Host` and
+`Authorization` request headers are rejected. Its response is
+`{ status, headers, body }`, using the same explicit body envelope. Text-like
+content types are UTF-8 and all other content is base64. Limits apply to raw
+bytes before base64 encoding.
+
+The S3 adapter exposes `getObject({ bucket, key })`,
+`putObject({ bucket, key, body, contentType? })`, `deleteObject({ bucket, key })`,
+and `listObjects({ bucket, prefix })`. Its scopes are `s3.read`, `s3.write`,
+and `s3.delete`. S3 endpoints, bucket and prefix allowlists, timeouts, and
+size limits are host-side service configuration. No method accepts an endpoint
+override or returns a presigned URL. Object bodies use the same explicit
+UTF-8/base64 envelope and their raw-byte size is capped before encoding.

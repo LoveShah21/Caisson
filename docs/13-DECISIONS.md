@@ -316,7 +316,7 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** A structured, adapter-discriminated credential prevents URI parsing ambiguity and makes TLS posture explicit. A redacting secret wrapper reduces accidental disclosure through normal logging and inspection paths, but does not replace the prohibition on logging secrets. Credential references originate in trusted control-plane data, yet Vault paths still require strict validation because an incorrect path could cross a secret boundary.
 
-**Consequences:** M-2 Postgres credentials are `{ host, port, database, username, password, sslMode }`, with `verify-full` as the default, `require` allowed, and `disable` limited to development. Values are fetched per call or held only in a bounded in-memory TTL and are never durable. Vault uses `VAULT_ADDR` and `VAULT_TOKEN`, KV-v2, request timeouts, HTTPS outside development, and paths constrained below the configured mount prefix. Production must replace the token with AppRole or platform authentication using short-lived credentials and a Vault policy limited to the Caisson path.
+**Consequences:** M-2 Postgres credentials are `{ host, port, database, username, password, sslMode }`, with `verify-full` as the default, `require` allowed, and `disable` limited to development. S3 credentials are `{ accessKeyId, secretAccessKey }`; bucket and prefix permissions remain host-side service configuration and IAM policy, not credential fields. Values are fetched per call or held only in a bounded in-memory TTL and are never durable. Vault uses `VAULT_ADDR` and `VAULT_TOKEN`, KV-v2, request timeouts, HTTPS outside development, and paths constrained below the configured mount prefix. Production must replace the token with AppRole or platform authentication using short-lived credentials and a Vault policy limited to the Caisson path.
 
 ---
 
@@ -339,3 +339,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** The current parser rejects EXPLAIN syntax. Allowing it through a prefix check would violate ADR-5. The parser is a security boundary, so M-2 must not add a parser dependency reactively for a convenience feature. M-2 therefore explicitly denies EXPLAIN and permits one parsed SELECT only. Read calls use separate read credentials with database SELECT-only grants, so the database remains a second enforcement layer if adapter validation is bypassed.
 
 **Consequences:** EXPLAIN support is a later reviewed task. It must select a parser deliberately and prove compatibility with the SELECT bypass suite, maintenance, and coverage criteria. `readCredentials` use the same redacting secret path as write credentials and must have no INSERT, UPDATE, DELETE, or DDL grants.
+
+---
+
+## ADR-30: HTTP connections use validated pinned IPs and S3 uses the reviewed SDK
+**Status:** accepted
+
+**Alternatives:** Let a standard HTTP client perform a second hostname lookup; allow redirects; implement S3 signing directly; add an unreviewed HTTP dispatcher dependency.
+
+**Reasoning:** A host allowlist alone does not prevent DNS rebinding to private or metadata addresses. The HTTP adapter resolves the allowlisted hostname once with Node DNS, rejects prohibited IPv4 and IPv6 ranges, then connects to that exact IP with the original hostname retained only for TLS SNI and the Host header. Redirects, userinfo, and guest-supplied Host or Authorization headers are rejected. The existing pinned AWS S3 SDK is added directly to the broker package so S3 signing is not reimplemented. S3 bucket and prefix restrictions are enforced both by host configuration and by the credential's storage policy.
+
+**Consequences:** HTTP method scope and side-effect declarations are parameter-dependent: safe methods use `http.read` and mutating methods use `http.write`. Both remain computed before policy evaluation. S3 uses `s3.read`, `s3.write`, and `s3.delete`, preserving the `service.capability` convention. The broker never accepts an S3 endpoint override or creates a presigned URL.

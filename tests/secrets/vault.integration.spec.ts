@@ -35,6 +35,18 @@ beforeAll(async () => {
     }),
   });
   if (!response.ok) throw new Error("unable to seed Vault integration fixture");
+  const s3Response = await fetch(`${address}/v1/secret/data/caisson/s3`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Vault-Token": ROOT_TOKEN },
+    body: JSON.stringify({
+      data: {
+        kind: "s3",
+        accessKeyId: "vault-s3-access-key",
+        secretAccessKey: "vault-s3-secret-key",
+      },
+    }),
+  });
+  if (!s3Response.ok) throw new Error("unable to seed Vault S3 integration fixture");
   backend = new VaultSecretBackend({
     address,
     token: ROOT_TOKEN,
@@ -56,5 +68,15 @@ describe("VaultSecretBackend integration", () => {
     });
     expect(credentials.host).toBe("db.internal");
     expect(JSON.stringify(credentials)).not.toContain("vault-integration-secret");
+  });
+
+  it("reads KV-v2 S3 credentials and never serializes the secret", async () => {
+    const credentials = await backend.fetch({
+      backend: "vault",
+      backendPath: "caisson/s3",
+      role: "object-store",
+    });
+    expect(credentials.kind).toBe("s3");
+    expect(JSON.stringify(credentials)).not.toContain("vault-s3-secret-key");
   });
 });

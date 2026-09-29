@@ -35,6 +35,26 @@ describe("secret backends", () => {
     });
   });
 
+  it("reads structured S3 credentials without exposing their values", async () => {
+    const backend = new EnvSecretBackend({
+      environment: {
+        CAISSON_S3: JSON.stringify({
+          kind: "s3",
+          accessKeyId: "caisson-s3-test-key",
+          secretAccessKey: "caisson-s3-test-secret",
+        }),
+      },
+      caissonEnvironment: "production",
+    });
+    const credentials = await backend.fetch({
+      backend: "env",
+      backendPath: "CAISSON_S3",
+      role: "object-store",
+    });
+    expect(credentials.kind).toBe("s3");
+    expect(JSON.stringify(credentials)).not.toContain("caisson-s3-test-secret");
+  });
+
   it("rejects Vault traversal and fails closed on authorization failure", async () => {
     let requests = 0;
     const backend = new VaultSecretBackend({

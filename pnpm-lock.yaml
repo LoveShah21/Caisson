@@ -193,6 +193,9 @@ importers:
 
   apps/broker:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1141.0
+        version: 3.1141.0
       '@caisson/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
