@@ -2,7 +2,9 @@
 
 `image.env` is the single image reference consumed by Compose, Testcontainers,
 and the CI build step. The image is built from the exact MinIO source commit
-listed there.
+listed there. It also includes the pinned `mc` source build used only by the
+real integration fixture to create a restricted test IAM principal. The
+running MinIO service does not invoke `mc`.
 
 ## Provenance
 
@@ -30,6 +32,11 @@ toolchain update. `go build -mod=readonly` requires the checked-out `go.sum`;
 downloaded module content is checked against those pinned hashes. This does
 not independently pin the availability of the Go module proxy or the Alpine
 base image.
+
+The fixture's `mc` build follows the same process. Its source is pinned to
+`7394ce0dd2a80935aded936b09fa12cbb3cb8096`, the official `minio/mc`
+`RELEASE.2025-08-13T08-35-41Z` commit. It is built with the same pinned Go
+version and `-mod=readonly` against the checked-out `go.sum`.
 
 Build it directly when running an integration test outside CI:
 

@@ -59,6 +59,7 @@ services:
       args:
         GO_VERSION: ${CAISSON_MINIO_GO_VERSION:?set in deploy/minio/image.env}
         MINIO_COMMIT: ${CAISSON_MINIO_SOURCE_COMMIT:?set in deploy/minio/image.env}
+        MC_COMMIT: ${CAISSON_MINIO_MC_SOURCE_COMMIT:?set in deploy/minio/image.env}
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${CAISSON_MINIO_USER:-caisson}

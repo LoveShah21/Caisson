@@ -13,6 +13,8 @@ execFileSync(
     `GO_VERSION=${imageConfig.CAISSON_MINIO_GO_VERSION}`,
     "--build-arg",
     `MINIO_COMMIT=${imageConfig.CAISSON_MINIO_SOURCE_COMMIT}`,
+    "--build-arg",
+    `MC_COMMIT=${imageConfig.CAISSON_MINIO_MC_SOURCE_COMMIT}`,
     "--tag",
     imageConfig.CAISSON_MINIO_IMAGE,
     "deploy/minio",
@@ -38,6 +40,7 @@ async function readImageConfig() {
     "CAISSON_MINIO_IMAGE",
     "CAISSON_MINIO_SOURCE_COMMIT",
     "CAISSON_MINIO_GO_VERSION",
+    "CAISSON_MINIO_MC_SOURCE_COMMIT",
   ]) {
     if (typeof values[key] !== "string" || values[key].length === 0) {
       throw new Error(`deploy/minio/image.env is missing ${key}`);

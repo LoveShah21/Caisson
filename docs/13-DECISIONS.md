@@ -327,7 +327,7 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** On 2026-09-29, Quay returned 401 for the prior pinned image, Docker Hub denied anonymous pulls for both prior and current MinIO tags, and MinIO's binary download endpoints returned HTTP 410. The official MinIO release directs container users to build from source. Caisson therefore pins the release commit, verifies the checkout's `HEAD` during the Docker build, pins the Go toolchain, and uses `go build -mod=readonly` so module content is verified against the source release's `go.sum`.
 
-**Consequences:** `deploy/minio/image.env` is the one image reference used by Compose, Testcontainers, and CI. The detailed provenance record names the checked upstream tag and commit and documents unavailable verification paths. This is not a complete supply-chain solution: the Go module proxy and base image remain external dependencies. M-2 tracks a later decision for an image mirror or freshness check because pinned-image disappearance has affected two registries.
+**Consequences:** `deploy/minio/image.env` is the one image reference used by Compose, Testcontainers, and CI. The detailed provenance record names the checked upstream tag and commit and documents unavailable verification paths. The development image also includes a source-built, pinned `mc` client only so the real MinIO test fixture can create a prefix-restricted IAM user and prove storage-side enforcement. This is not a complete supply-chain solution: the Go module proxy and base image remain external dependencies. M-2 tracks a later decision for an image mirror or freshness check because pinned-image disappearance has affected two registries.
 
 ---
 

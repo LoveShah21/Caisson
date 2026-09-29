@@ -14,6 +14,9 @@ const bucket = "adapter-test";
 const context = { timeoutMs: 5_000 };
 let fixture: MinioFixture;
 let root: S3Client;
+let restricted: S3Client;
+const restrictedAccessKeyId = "caisson-s3-prefix-test";
+const restrictedSecretAccessKey = "caisson-s3-prefix-test-secret";
 
 beforeAll(async () => {
   fixture = await createMinioFixture();
@@ -43,10 +46,26 @@ beforeAll(async () => {
   await root.send(
     new PutObjectCommand({ Bucket: bucket, Key: "private/secret.txt", Body: "not allowlisted" }),
   );
+  await fixture.createPrefixRestrictedUser({
+    bucket,
+    prefix: "allowed/",
+    accessKeyId: restrictedAccessKeyId,
+    secretAccessKey: restrictedSecretAccessKey,
+  });
+  restricted = new S3Client({
+    endpoint: fixture.endpoint,
+    region: "us-east-1",
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: restrictedAccessKeyId,
+      secretAccessKey: restrictedSecretAccessKey,
+    },
+  });
 }, 60_000);
 
 afterAll(async () => {
   root?.destroy();
+  restricted?.destroy();
   await fixture?.close();
 });
 
@@ -158,12 +177,18 @@ describe("S3Adapter", () => {
       await expect(
         adapter.methods.listObjects.execute(credentials(), { bucket, prefix: "private/" }, context),
       ).rejects.toMatchObject({ code: "SCOPE_DENIED" });
-      await expect(
-        root.send(new GetObjectCommand({ Bucket: bucket, Key: "private/secret.txt" })),
-      ).resolves.toBeDefined();
     } finally {
       adapter.destroy();
     }
+  });
+
+  it("is blocked by MinIO IAM outside the configured prefix", async () => {
+    await expect(
+      restricted.send(new GetObjectCommand({ Bucket: bucket, Key: "allowed/text.json" })),
+    ).resolves.toBeDefined();
+    await expect(
+      restricted.send(new GetObjectCommand({ Bucket: bucket, Key: "private/secret.txt" })),
+    ).rejects.toMatchObject({ name: "AccessDenied" });
   });
 
   it("enforces the raw object size limit", async () => {
@@ -198,7 +223,7 @@ function createAdapter(overrides: Partial<{ readonly objectSizeBytes: number }> 
 function credentials() {
   return {
     kind: "s3" as const,
-    accessKeyId: new SecretString(fixture.accessKeyId),
-    secretAccessKey: new SecretString(fixture.secretAccessKey),
+    accessKeyId: new SecretString(restrictedAccessKeyId),
+    secretAccessKey: new SecretString(restrictedSecretAccessKey),
   };
 }
