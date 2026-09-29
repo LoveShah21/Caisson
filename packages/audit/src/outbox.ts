@@ -56,7 +56,7 @@ type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-interface AuditPayload extends Readonly<Record<string, JsonValue>> {
+export interface AuditPayload extends Readonly<Record<string, JsonValue>> {
   readonly actionId: string;
   readonly timestamp: string;
   readonly eventType: string;
@@ -111,7 +111,7 @@ export class AuditOutboxWriter {
   }
 
   async enqueue(input: AuditEventInput): Promise<StoredAuditEvent> {
-    const payload = normalizePayload(input);
+    const payload = buildAuditPayload(input);
     return this.#sql.begin(async (transaction) => {
       return allocateOutboxEvent(transaction, input, payload);
     });
@@ -121,7 +121,7 @@ export class AuditOutboxWriter {
     transaction: Sql | TransactionSql,
     input: AuditEventInput,
   ): Promise<StoredAuditEvent> {
-    return allocateOutboxEvent(transaction, input, normalizePayload(input));
+    return allocateOutboxEvent(transaction, input, buildAuditPayload(input));
   }
 
   async persistBeforeExecution(input: AuditEventInput): Promise<StoredAuditEvent> {
@@ -297,7 +297,7 @@ export class ClickHouseAuditSink implements AuditSink {
   }
 }
 
-function normalizePayload(input: AuditEventInput): AuditPayload {
+export function buildAuditPayload(input: AuditEventInput): AuditPayload {
   const payload: AuditPayload = {
     actionId: input.actionId,
     timestamp: (input.timestamp ?? new Date()).toISOString(),

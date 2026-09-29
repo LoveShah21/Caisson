@@ -1,9 +1,10 @@
 import { inspect } from "node:util";
 
 import { PostgresAdapter } from "../../apps/broker/src/postgres-adapter.js";
+import { buildAuditPayload } from "../../packages/audit/src/outbox.js";
 import { SecretString } from "../../packages/secrets/src/credentials.js";
 import postgres from "postgres";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createPostgresFixture } from "../helpers/postgres.js";
 
@@ -204,6 +205,59 @@ describe("PostgresAdapter", () => {
     expect(() => new PostgresAdapter(undefined as never)).toThrow("limits are required");
     expect(() => new PostgresAdapter({ ...config, rowLimit: 0 })).toThrow("positive integers");
   });
+
+  it("does not expose a credential canary through failures, logs, serialization, or audit payloads", async () => {
+    const canary = "postgres-canary-7c6de8b5-f278-4ca0-b8e4-7aae368a45d8";
+    const adapter = new PostgresAdapter(config);
+    const credentials = credentialsFor(
+      "postgres://unused:unused@127.0.0.1:1/unused",
+      canary,
+      canary,
+    );
+    const logged: unknown[][] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation((...values: unknown[]) => {
+      logged.push(values);
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation((...values: unknown[]) => {
+      logged.push(values);
+    });
+    let failure: unknown;
+    try {
+      await adapter.methods.query.execute(credentials, { sql: "SELECT 1" }, context);
+    } catch (error: unknown) {
+      failure = error;
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      await adapter.close();
+    }
+
+    expect(failure).toMatchObject({ code: "SERVICE_ERROR" });
+    const payload = buildAuditPayload({
+      sessionId: "018f0000-0000-7000-8000-000000000199",
+      actionId: "018f0000-0000-7000-8000-000000000200",
+      eventType: "action.failed",
+      actionType: "broker",
+      service: "postgres",
+      method: "query",
+      paramsPreview: JSON.stringify({ credentials }),
+      paramsHash: "0".repeat(64),
+      errorCode: "SERVICE_ERROR",
+      driver: "container",
+      hardwareIsolated: false,
+    });
+    const observable = [
+      String(failure),
+      JSON.stringify(failure),
+      inspect(failure),
+      JSON.stringify(credentials),
+      inspect(credentials),
+      JSON.stringify(payload),
+      inspect(payload),
+      ...logged.flatMap((values) => values.map((value) => String(value))),
+    ].join("\n");
+    expect(observable).not.toContain(canary);
+  });
 });
 
 async function expectQueryDenied(sql: string, code = "SCOPE_DENIED") {
@@ -230,7 +284,11 @@ async function expectExecuteDenied(sql: string, code = "SCOPE_DENIED") {
   }
 }
 
-function credentialsFor(url: string) {
+function credentialsFor(
+  url: string,
+  password = decodeURIComponent(new URL(url).password),
+  readPassword = "reader-test-only",
+) {
   const parsed = new URL(url);
   return {
     kind: "postgres" as const,
@@ -238,10 +296,10 @@ function credentialsFor(url: string) {
     port: Number(parsed.port),
     database: parsed.pathname.slice(1),
     username: new SecretString(decodeURIComponent(parsed.username)),
-    password: new SecretString(decodeURIComponent(parsed.password)),
+    password: new SecretString(password),
     readCredentials: {
       username: new SecretString("caisson_reader"),
-      password: new SecretString("reader-test-only"),
+      password: new SecretString(readPassword),
     },
     sslMode: "disable" as const,
   };
