@@ -101,7 +101,13 @@ async function boot(rootfsPath: string) {
   const driver = makeDriver(rootfsPath);
   const host = new RuntimeVsockTransportHost();
   const prepared = await driver.prepare({ id: randomUUID(), image: "caisson-runtime" }, host);
-  await driver.start(prepared.handle);
+  try {
+    await driver.start(prepared.handle);
+  } catch (error: unknown) {
+    await driver.destroy(prepared.handle);
+    await host.release(prepared.transport);
+    throw error;
+  }
   return { driver, host, prepared };
 }
 
@@ -118,7 +124,13 @@ async function restore(rootfsPath: string, snapshot: LocalSnapshot) {
     { id: randomUUID(), image: "caisson-runtime-diagnostic" },
     host,
   );
-  await driver.start(prepared.handle);
+  try {
+    await driver.start(prepared.handle);
+  } catch (error: unknown) {
+    await driver.destroy(prepared.handle);
+    await host.release(prepared.transport);
+    throw error;
+  }
   return { driver, host, prepared };
 }
 

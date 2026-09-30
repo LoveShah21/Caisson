@@ -12,7 +12,13 @@ mkdir -p "$(dirname "$output")" "$work"
 truncate -s 32M "$output"; mkfs.ext4 -q -F "$output"
 debugfs -w -R "mkdir /dev" "$output" >/dev/null
 debugfs -w -R "mkdir /proc" "$output" >/dev/null
+debugfs -w -R "mknod /dev/null c 1 3" "$output" >/dev/null
+debugfs -w -R "mknod /dev/random c 1 8" "$output" >/dev/null
+debugfs -w -R "mknod /dev/urandom c 1 9" "$output" >/dev/null
 debugfs -w -R "write $work/init /init" "$output" >/dev/null
 debugfs -w -R "sif /init mode 0100755" "$output" >/dev/null
+debugfs -w -R "sif /dev/null mode 020666" "$output" >/dev/null
+debugfs -w -R "sif /dev/random mode 020666" "$output" >/dev/null
+debugfs -w -R "sif /dev/urandom mode 020666" "$output" >/dev/null
 debugfs -R 'stat /init' "$output" | grep -q 'Mode:.*0100755'
 node "$root/../scripts/check-runtime-rootfs-inventory.mjs" "$output"

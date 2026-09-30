@@ -204,13 +204,10 @@ func mixEntropy(connection int) error {
 }
 
 func mountFilesystems() error {
-	if err := os.MkdirAll("/proc", 0o555); err != nil {
-		return err
-	}
 	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
-		return err
+		return fmt.Errorf("mount proc: %w", err)
 	}
-	return syscall.Mount("devtmpfs", "/dev", "devtmpfs", 0, "mode=0755")
+	return nil
 }
 
 func fail(message string) {
