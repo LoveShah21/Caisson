@@ -8,3 +8,5 @@
 - memoryBytes: 4020461568
 
 On WSL2, `cpuCount` and `memoryBytes` describe the resources allocated to the Linux VM, not the physical resources of the Windows host.
+
+Measurements with timingModel prepare_start_broker_call_destroy and restore_entropy_refresh_destroy are M-2 runtime measurements. They are not comparable to M-1 probe measurements or pre-runtime prepare/start measurements because the guest, readiness gate, and timed work changed.
