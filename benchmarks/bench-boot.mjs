@@ -18,7 +18,7 @@ const execFileAsync = promisify(execFile);
 const samples = Number.parseInt(process.env.CAISSON_BENCH_SAMPLES ?? "200", 10);
 const image = process.env.CAISSON_BENCH_IMAGE ?? "alpine:3.23.3";
 const driverName = process.env.CAISSON_BENCH_DRIVER ?? "container";
-const firecrackerBootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init";
+const firecrackerBootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init";
 
 if (!Number.isInteger(samples) || samples < 200) {
   throw new Error("CAISSON_BENCH_SAMPLES must be an integer of at least 200");
@@ -232,7 +232,7 @@ async function measureRestore(driver, snapshot) {
     const transportHost = new BenchmarkTransportHost();
     const prepared = await driver.restore(
       snapshot,
-      { id: randomUUID(), image: "m1-dev-probe" },
+      { id: randomUUID(), image: "caisson-runtime" },
       transportHost,
     );
     await driver.start(prepared.handle);
