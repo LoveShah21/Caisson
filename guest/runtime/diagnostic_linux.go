@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -139,8 +140,8 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			return
 		}
 	}
-	if request.Operation == "scan_secret_shapes" && request.Path == "" && request.Value == "" {
-		matches, err := diagnosticSecretShapeLocations()
+	if request.Operation == "scan_canary" && request.Path == "" && request.Value == "" {
+		matches, err := diagnosticCanaryLocations()
 		if err == nil {
 			value, _ := json.Marshal(matches)
 			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: string(value)})
@@ -152,13 +153,23 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 
 var diagnosticSecretShape = regexp.MustCompile(`AKIA[A-Z0-9]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|sk-[A-Za-z0-9]{20,}`)
 
-// diagnosticSecretShapeLocations inspects only diagnostic-visible process and
-// filesystem state. It returns locations, never matched values.
-func diagnosticSecretShapeLocations() ([]string, error) {
+// diagnosticCanaryLocations inspects diagnostic-visible process and filesystem
+// state for the known test canary. The host supplies only its SHA-256 digest in
+// boot configuration, never the canary value. It returns locations, never
+// matched values.
+func diagnosticCanaryLocations() ([]string, error) {
+	wanted, err := diagnosticCanaryHash()
+	if err != nil {
+		return nil, err
+	}
 	matches := make([]string, 0)
 	inspect := func(location string, value []byte) {
-		if diagnosticSecretShape.Match(value) {
-			matches = append(matches, location)
+		for _, candidate := range diagnosticSecretShape.FindAll(value, -1) {
+			digest := sha256.Sum256(candidate)
+			if hex.EncodeToString(digest[:]) == wanted {
+				matches = append(matches, location)
+				return
+			}
 		}
 	}
 	inspect("environment", []byte(strings.Join(os.Environ(), "\n")))
@@ -192,6 +203,22 @@ func diagnosticSecretShapeLocations() ([]string, error) {
 		}
 	}
 	return matches, nil
+}
+
+func diagnosticCanaryHash() (string, error) {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return "", err
+	}
+	for _, field := range strings.Fields(string(data)) {
+		if value, ok := strings.CutPrefix(field, "caisson.diagnostic_canary_sha256="); ok {
+			if len(value) == 64 && regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(value) {
+				return value, nil
+			}
+			break
+		}
+	}
+	return "", fmt.Errorf("diagnostic canary digest missing or invalid")
 }
 
 func isDecimal(value string) bool {

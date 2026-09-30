@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants } from "node:fs";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -39,8 +39,10 @@ const kvmEnabled =
   hasKvmAccess();
 const sessionId = "018f0000-0000-7000-8000-000000000801";
 const credentialCanary = "AKIA7M2C4N4RY0000000";
+const credentialCanaryHash = createHash("sha256").update(credentialCanary).digest("hex");
 const bootArgs =
-  "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init caisson.diagnostic_preflight=1";
+  "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init " +
+  `caisson.diagnostic_preflight=1 caisson.diagnostic_canary_sha256=${credentialCanaryHash}`;
 const request = {
   id: "live-postgres-query",
   op: "broker.call" as const,
@@ -172,7 +174,7 @@ describe("INV-1: no secret in a Firecracker guest", () => {
       console.warn = (...values: unknown[]) => logs.push(values.map(String).join(" "));
       try {
         await driver.start(prepared.handle);
-        const before = await driverDiagnostic(host, prepared, { operation: "scan_secret_shapes" });
+        const before = await driverDiagnostic(host, prepared, { operation: "scan_canary" });
         expect(before.value).toBe("[]");
         await driverDiagnostic(host, prepared, { operation: "continue_broker" });
         await waitFor(() => host.messages.length === 2);
@@ -185,7 +187,7 @@ describe("INV-1: no secret in a Firecracker guest", () => {
         expect(host.messages.some((message) => containsSecretShape(JSON.parse(message)))).toBe(
           false,
         );
-        const after = await driverDiagnostic(host, prepared, { operation: "scan_secret_shapes" });
+        const after = await driverDiagnostic(host, prepared, { operation: "scan_canary" });
         expect(after.value).toBe("[]");
         const outbox = await postgres.sql<{ payload: unknown }[]>`
           SELECT payload FROM audit_outbox WHERE session_id = ${sessionId} ORDER BY seq
@@ -223,7 +225,7 @@ function bootstrap(databaseUrl: string, script: string): void {
 async function driverDiagnostic(
   host: RuntimeVsockTransportHost,
   prepared: PreparedSandbox,
-  request: { readonly operation: "scan_secret_shapes" } | { readonly operation: "continue_broker" },
+  request: { readonly operation: "scan_canary" } | { readonly operation: "continue_broker" },
 ) {
   const { callRuntimeDiagnostic } = await import("../../packages/isolation/src/index.js");
   for (let attempt = 0; attempt < 100; attempt += 1) {
