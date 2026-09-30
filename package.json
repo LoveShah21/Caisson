@@ -10,6 +10,7 @@
   "scripts": {
     "build": "turbo run build",
     "bootstrap:policy": "node scripts/bootstrap-policy.mjs",
+    "bootstrap:services": "node scripts/bootstrap-services.mjs",
     "build:minio": "node scripts/build-minio-image.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:runtime-versions": "node scripts/check-runtime-versions.mjs",
@@ -19,6 +20,7 @@
     "policy:test": "node scripts/test-policy.mjs",
     "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
     "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
+    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
@@ -29,6 +31,7 @@
     "testcontainers": "^12.1.0",
     "turbo": "^2.11.2",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "zod": "^4.6.5"
   }
 }

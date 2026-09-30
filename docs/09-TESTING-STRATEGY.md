@@ -19,6 +19,12 @@ summary for container-backed tests even after their cleanup succeeds. Use
 those tests. CI runs Linux with Vitest's default pool and must report its normal
 summary; this local workaround does not weaken CI coverage.
 
+Native Windows cannot bind the Unix-domain sockets exercised by the container
+driver mechanism test and INV-7. Run `pnpm test:wsl2` from WSL2 for that pair.
+This is an explicit platform split, not a skipped security check. Set
+`CAISSON_INV7_FIRECRACKER=1` with the documented Firecracker inputs in a
+KVM-capable WSL2/Linux environment to run INV-7's Firecracker case.
+
 ## 2. The mocking rule
 
 You may mock an external service. You may never mock the policy engine, the secret backend, the audit writer, the transport binding, or the isolation driver in a test that asserts an invariant. Mocking a control in the test that proves the control works is how security test suites become decorative.
