@@ -8,3 +8,5 @@ coverage/
 .env.*
 !.env.example
 guest/rootfs/m1-dev-probe-rootfs.ext4
+guest/rootfs/caisson-runtime-rootfs.ext4
+guest/rootfs/caisson-runtime-diagnostic-rootfs.ext4
