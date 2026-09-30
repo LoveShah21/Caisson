@@ -14,13 +14,14 @@
     "build:minio": "node scripts/build-minio-image.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:runtime-versions": "node scripts/check-runtime-versions.mjs",
+    "check:runtime-rootfs": "node scripts/check-runtime-rootfs-inventory.mjs guest/rootfs/caisson-runtime-rootfs.ext4",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "turbo run lint",
     "policy:test": "node scripts/test-policy.mjs",
     "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
     "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
-    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts",
+    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts tests/isolation/firecracker-runtime.integration.spec.ts tests/guest/runtime-rootfs-inventory.spec.ts",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {

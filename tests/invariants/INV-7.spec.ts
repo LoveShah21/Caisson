@@ -8,13 +8,15 @@ import { accessSync, constants } from "node:fs";
 import { basename } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  callRuntimeDiagnostic,
   ContainerDriver,
   FirecrackerDriver,
   type IsolationDriver,
+  type LocalSnapshot,
   type PreparedSandbox,
-  VsockInfrastructureProbe,
 } from "../../packages/isolation/src/index.js";
 import { TestTransportHost } from "../helpers/transport-host.js";
+import { RuntimeVsockTransportHost } from "../helpers/runtime-vsock-transport-host.js";
 
 const handles: Array<{
   driver: IsolationDriver;
@@ -26,8 +28,20 @@ const firecrackerInv7Enabled =
   process.platform === "linux" &&
   hasKvmAccess() &&
   process.env.CAISSON_INV7_FIRECRACKER_ROOTFS !== undefined &&
-  basename(process.env.CAISSON_INV7_FIRECRACKER_ROOTFS) !== "m1-dev-probe-rootfs.ext4";
-const firecrackerBootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init";
+  basename(process.env.CAISSON_INV7_FIRECRACKER_ROOTFS) ===
+    "caisson-runtime-diagnostic-rootfs.ext4";
+const firecrackerBootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init";
+const runtimeRequest = {
+  id: "inv7-runtime",
+  op: "broker.call" as const,
+  body: {
+    service: "runtime-test",
+    method: "read",
+    params: {},
+    idempotencyKey: "inv7-runtime",
+    intent: "verify no persistence across diagnostic restores",
+  },
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -44,7 +58,7 @@ describe("INV-7: no persistence across sessions", () => {
   }, 60_000);
 
   it.skipIf(!firecrackerInv7Enabled)(
-    "FirecrackerDriver requires CAISSON_INV7_FIRECRACKER=1, KVM, and an eligible non-M1 rootfs",
+    "FirecrackerDriver requires CAISSON_INV7_FIRECRACKER=1, KVM, and the diagnostic runtime rootfs",
     async () => {
       const rootfsPath = requiredEnvironment("CAISSON_INV7_FIRECRACKER_ROOTFS");
       const driver = new FirecrackerDriver({
@@ -54,9 +68,9 @@ describe("INV-7: no persistence across sessions", () => {
         runtimeDirectory: requiredEnvironment("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
         bootArgs: firecrackerBootArgs,
-        infrastructureProbe: new VsockInfrastructureProbe(),
+        oneShotBrokerRequest: runtimeRequest,
       });
-      await assertNoWorkspacePersistence(driver, "caisson-inv7-firecracker");
+      await assertNoRuntimePersistence(driver, rootfsPath);
     },
     60_000,
   );
@@ -82,6 +96,92 @@ async function assertNoWorkspacePersistence(driver: IsolationDriver, image: stri
     argv: ["/bin/sh", "-c", "test ! -e /workspace/marker"],
   });
   expect(result.exitCode).toBe(0);
+}
+
+async function assertNoRuntimePersistence(
+  driver: FirecrackerDriver,
+  rootfsPath: string,
+): Promise<void> {
+  const sourceHost = new RuntimeVsockTransportHost();
+  const source = await driver.prepare(
+    { id: randomUUID(), image: "caisson-runtime-diagnostic" },
+    sourceHost,
+  );
+  await driver.start(source.handle);
+  await waitForDiagnostic(sourceHost, source);
+  const snapshot = await driver.snapshot(source.handle, "base");
+  await driver.destroy(source.handle);
+  await sourceHost.release(source.transport);
+
+  try {
+    const firstHost = new RuntimeVsockTransportHost();
+    const first = await driver.restore(
+      resolveSnapshot(snapshot, rootfsPath),
+      { id: randomUUID(), image: "diagnostic" },
+      firstHost,
+    );
+    await driver.start(first.handle);
+    await waitForDiagnostic(firstHost, first, {
+      operation: "write_marker",
+      path: "/dev/shm/caisson-marker",
+      value: `caisson-inv7-${randomUUID()}`,
+    });
+    await driver.destroy(first.handle);
+    await firstHost.release(first.transport);
+
+    const secondHost = new RuntimeVsockTransportHost();
+    const second = await driver.restore(
+      resolveSnapshot(snapshot, rootfsPath),
+      { id: randomUUID(), image: "diagnostic" },
+      secondHost,
+    );
+    await driver.start(second.handle);
+    const result = await waitForDiagnostic(secondHost, second, {
+      operation: "read_marker",
+      path: "/dev/shm/caisson-marker",
+    });
+    expect(result.value).toBeUndefined();
+    await driver.destroy(second.handle);
+    await secondHost.release(second.transport);
+  } finally {
+    const { rm } = await import("node:fs/promises");
+    await Promise.all([
+      rm(snapshot.statePath, { force: true }),
+      rm(snapshot.memoryPath, { force: true }),
+    ]);
+  }
+}
+
+function resolveSnapshot(snapshot: LocalSnapshot, rootfsPath: string) {
+  return {
+    ref: {
+      id: snapshot.id,
+      kind: snapshot.kind,
+      manifest: { bucket: "test", key: "test", sha256: "0".repeat(64), sizeBytes: 1 },
+      manifestKeyId: "test",
+      createdAt: snapshot.createdAt,
+    },
+    statePath: snapshot.statePath,
+    memoryPath: snapshot.memoryPath,
+    rootfsPath,
+  };
+}
+
+async function waitForDiagnostic(
+  host: RuntimeVsockTransportHost,
+  prepared: PreparedSandbox,
+  request: Parameters<typeof callRuntimeDiagnostic>[1] = { operation: "random" },
+) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      return await callRuntimeDiagnostic(host.endpointFor(prepared.transport), request);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError;
 }
 
 function requiredEnvironment(name: string): string {

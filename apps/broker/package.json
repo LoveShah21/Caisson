@@ -22,6 +22,7 @@
     "@aws-sdk/client-s3": "^3.1141.0",
     "@caisson/audit": "workspace:*",
     "@caisson/control-plane": "workspace:*",
+    "@caisson/isolation": "workspace:*",
     "@caisson/policy": "workspace:*",
     "@caisson/protocol": "workspace:*",
     "@caisson/secrets": "workspace:*",

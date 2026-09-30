@@ -416,3 +416,25 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** M-2 requires a real Firecracker broker path, an eligible base rootfs, and FR-17a before warm restores can serve sessions. The M-1 probe is deliberately unrestricted and structurally ineligible. Pulling the full agent runtime forward would expand M-2 with seven tools and their M-3 security work. A narrow static `/init` can instead implement only bounded framed `broker.call` messages and a dedicated entropy-control message. After restore, the host sends 256 bits of fresh entropy over the trusted vsock channel; the guest mixes it with `RNDADDENTROPY` or an equivalent kernel operation and acknowledges success. The host cannot mark the guest ready without that acknowledgement. The real proof is two restored guests from one snapshot producing distinct random output.
 
 **Consequences:** The eligible rootfs contains only the static runtime and minimal init/device setup. An inventory test enforces an explicit file allowlist and rejects credentials, tokens, fixtures, and build artifacts. The runtime accepts no token or credential material, and the snapshot harness inspects every message delivered to the guest for secret-shaped values before capture. The full seven-tool runtime remains M-3. FR-17a and this minimal runtime move to M-2; FR-16 and FR-17b remain M-3.
+
+---
+
+## ADR-37: M-2 guest runtime receives a one-shot broker call through boot configuration
+**Status:** accepted
+
+**Alternatives:** Add a guest-local listener for a future agent runtime; compile a fixed test request into the rootfs; defer live vsock verification.
+
+**Reasoning:** M-2 must prove guest-initiated broker transport without inventing the M-3 agent-runtime interface. The host supplies one validated `broker.call` request as a base64 boot parameter when starting a verification guest. It is immutable from the guest's perspective and permits test runs to vary inputs without changing the rootfs.
+
+**Consequences:** The rootfs contains no request fixture. The control plane validates the decoded request with `BrokerCallRequestSchema` before constructing Firecracker boot arguments. The M-2 runtime executes exactly one request, validates its bounded frame transport, then remains idle as PID 1 so a clean base snapshot stays runnable. This is a verification interface only and must not be presented as the M-3 agent interface.
+
+---
+
+## ADR-38: Test diagnostics are a separate ineligible runtime artifact
+**Status:** accepted
+
+**Alternatives:** Add marker and random-output commands to the eligible M-2 runtime; keep using the unrestricted M-1 probe for KVM verification; infer restored entropy freshness from an acknowledgement alone.
+
+**Reasoning:** INV-7 and the entropy-distinctness test need observable marker and random values, but those commands are not a production capability and do not belong in the minimal guest surface. The diagnostic rootfs is built from the same runtime source with a compile-time `diagnostic` tag. It adds only a host-initiated vsock diagnostic port after the initial entropy acknowledgement and broker round trip. The production artifact has no diagnostic listener or handlers. A fresh host entropy message is required both for cold boot and every restore; the acknowledgement gates readiness, while distinct kernel-random output across two restores proves the property.
+
+**Consequences:** `caisson-runtime-diagnostic-rootfs.ext4` and `m1-dev-probe-rootfs.ext4` are permanently rejected for production and base-snapshot promotion. The eligible `caisson-runtime-rootfs.ext4` contains only `/init`, `/dev`, and `/proc` plus unavoidable ext4 metadata, checked by the rootfs build. KVM-only tests use the diagnostic artifact but exercise the same entropy, framing, and vsock code as the eligible runtime. The host records every message delivered to the guest before snapshot capture and rejects secret-shaped content in the verification harness.

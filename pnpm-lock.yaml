@@ -205,6 +205,9 @@ importers:
       '@caisson/control-plane':
         specifier: workspace:*
         version: link:../control-plane
+      '@caisson/isolation':
+        specifier: workspace:*
+        version: link:../../packages/isolation
       '@caisson/policy':
         specifier: workspace:*
         version: link:../../packages/policy

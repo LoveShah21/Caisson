@@ -27,6 +27,7 @@ import type {
   SnapshotObjectRef,
   SnapshotRef,
 } from "@caisson/isolation";
+import { isIneligibleBaseRootfs } from "@caisson/isolation";
 import { CaissonError } from "@caisson/protocol";
 import { z } from "zod";
 
@@ -185,10 +186,10 @@ export class S3BaseSnapshotStore {
         "base snapshot requires state, memory, rootfs, and kernel artifacts",
       );
     }
-    if (local.rootfsPath.endsWith("m1-dev-probe-rootfs.ext4")) {
+    if (isIneligibleBaseRootfs(local.rootfsPath)) {
       throw new CaissonError(
         "SANDBOX_FAILED",
-        "the M-1 development probe rootfs is ineligible for base snapshot storage",
+        "development probe and diagnostic rootfs artifacts are ineligible for base snapshot storage",
       );
     }
     await this.ensureBucket();

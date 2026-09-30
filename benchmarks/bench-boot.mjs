@@ -6,11 +6,13 @@ import os from "node:os";
 import { basename, dirname } from "node:path";
 import { promisify } from "node:util";
 import { EnvManifestKeyProvider, S3BaseSnapshotStore } from "../apps/control-plane/dist/index.js";
+import { ContainerDriver, FirecrackerDriver } from "../packages/isolation/dist/index.js";
 import {
-  ContainerDriver,
-  FirecrackerDriver,
-  VsockInfrastructureProbe,
-} from "../packages/isolation/dist/index.js";
+  BrokerCallRequestSchema,
+  BrokerCallResponseSchema,
+  decodeBrokerFrameLength,
+  encodeBrokerFrame,
+} from "../packages/protocol/dist/index.js";
 
 const execFileAsync = promisify(execFile);
 const samples = Number.parseInt(process.env.CAISSON_BENCH_SAMPLES ?? "200", 10);
@@ -36,6 +38,7 @@ function requiredEnvironment(name) {
 class BenchmarkTransportHost {
   #servers = new Map();
   #attachments = new Map();
+  #calls = new Map();
 
   async reserve(descriptor) {
     const endpointPath =
@@ -46,14 +49,17 @@ class BenchmarkTransportHost {
     await chmod(dirname(endpointPath), 0o700);
     const attachment = { descriptor, endpointPath };
     this.#attachments.set(descriptor.peerIdentifier, attachment);
-    if (descriptor.kind !== "unix") return attachment;
-    const server = net.createServer();
+    const listenerPath = descriptor.kind === "unix" ? endpointPath : `${endpointPath}_1024`;
+    const server =
+      descriptor.kind === "unix"
+        ? net.createServer()
+        : net.createServer((socket) => this.#handleRuntimeCall(descriptor.peerIdentifier, socket));
     await new Promise((resolve, reject) => {
       server.once("error", reject);
-      server.listen(endpointPath, resolve);
+      server.listen(listenerPath, resolve);
     });
-    await chmod(endpointPath, 0o600);
-    const stat = await lstat(endpointPath);
+    await chmod(listenerPath, 0o600);
+    const stat = await lstat(listenerPath);
     if (!stat.isSocket() || (stat.mode & 0o077) !== 0) {
       throw new Error("benchmark transport socket must be owner-only");
     }
@@ -68,14 +74,75 @@ class BenchmarkTransportHost {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
     }
-    await rm(
-      this.#attachments.get(descriptor.peerIdentifier)?.endpointPath ?? descriptor.peerIdentifier,
-      {
-        force: true,
-      },
-    );
+    const endpointPath =
+      this.#attachments.get(descriptor.peerIdentifier)?.endpointPath ?? descriptor.peerIdentifier;
+    await Promise.all([
+      rm(endpointPath, { force: true }),
+      rm(`${endpointPath}_1024`, { force: true }),
+    ]);
     this.#servers.delete(descriptor.peerIdentifier);
     this.#attachments.delete(descriptor.peerIdentifier);
+    this.#calls.delete(descriptor.peerIdentifier);
+  }
+
+  async waitForRuntimeCall(descriptor) {
+    const value = this.#calls.get(descriptor.peerIdentifier);
+    if (value?.resolve === undefined && value !== undefined) return value;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("runtime broker call timed out")), 30_000);
+      this.#calls.set(descriptor.peerIdentifier, {
+        resolve: (request) => {
+          clearTimeout(timer);
+          resolve(request);
+        },
+      });
+    });
+  }
+
+  #handleRuntimeCall(peerIdentifier, socket) {
+    const chunks = [];
+    let handled = false;
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk) => {
+      if (handled) return;
+      chunks.push(chunk);
+      const frame = Buffer.concat(chunks);
+      if (frame.length < 4) return;
+      let length;
+      try {
+        length = decodeBrokerFrameLength(frame.subarray(0, 4));
+      } catch {
+        socket.destroy();
+        return;
+      }
+      if (frame.length < length + 4) return;
+      if (frame.length !== length + 4) return socket.destroy();
+      handled = true;
+      try {
+        const request = BrokerCallRequestSchema.parse(
+          JSON.parse(frame.subarray(4).toString("utf8")),
+        );
+        const response = BrokerCallResponseSchema.parse({
+          id: request.id,
+          ok: true,
+          body: {
+            result: { status: "benchmark-ok" },
+            meta: {
+              durationMs: 0,
+              redactionCount: 0,
+              roleUsed: "benchmark",
+              actionId: "018f0000-0000-7000-8000-000000000702",
+            },
+          },
+        });
+        const waiting = this.#calls.get(peerIdentifier);
+        if (waiting?.resolve !== undefined) waiting.resolve(request);
+        else this.#calls.set(peerIdentifier, request);
+        socket.end(encodeBrokerFrame(JSON.stringify(response)));
+      } catch {
+        socket.destroy();
+      }
+    });
   }
 }
 
@@ -89,17 +156,8 @@ async function createFirecrackerDriver(snapshotStore) {
     throw new Error("set CAISSON_BENCH_FIRECRACKER=1 to run the opt-in Firecracker benchmark");
   }
   const configuredRootfsPath = requiredEnvironment("CAISSON_FIRECRACKER_ROOTFS");
-  if (
-    snapshotStore === undefined &&
-    basename(configuredRootfsPath) !== "m1-dev-probe-rootfs.ext4"
-  ) {
-    throw new Error("the local-only M-1 Firecracker benchmark requires m1-dev-probe-rootfs.ext4");
-  }
-  if (
-    snapshotStore !== undefined &&
-    basename(configuredRootfsPath) === "m1-dev-probe-rootfs.ext4"
-  ) {
-    throw new Error("the S3 cache-hit benchmark requires an eligible non-M-1-development rootfs");
+  if (basename(configuredRootfsPath) !== "caisson-runtime-rootfs.ext4") {
+    throw new Error("the M-2 Firecracker benchmark requires caisson-runtime-rootfs.ext4");
   }
   const rootfsPath =
     snapshotStore === undefined
@@ -112,9 +170,21 @@ async function createFirecrackerDriver(snapshotStore) {
     runtimeDirectory: requiredEnvironment("CAISSON_FIRECRACKER_RUNTIME_DIR"),
     snapshotDirectory: requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
     bootArgs: firecrackerBootArgs,
-    infrastructureProbe: new VsockInfrastructureProbe(),
+    oneShotBrokerRequest: runtimeBrokerRequest,
   });
 }
+
+const runtimeBrokerRequest = {
+  id: "benchmark-runtime",
+  op: "broker.call",
+  body: {
+    service: "runtime-test",
+    method: "read",
+    params: {},
+    idempotencyKey: "benchmark-runtime",
+    intent: "verify the runtime benchmark broker round trip",
+  },
+};
 
 function createSnapshotStore() {
   if (process.env.CAISSON_BENCH_SNAPSHOT_STORE !== "1") return undefined;
@@ -139,9 +209,13 @@ async function measureCreate(driver, sandboxImage) {
     await driver.start(prepared.handle);
     const handle = prepared.handle;
     try {
-      const result = await driver.exec(handle, { argv: ["/bin/echo", "hello"] });
-      if (result.exitCode !== 0 || result.stdout !== "hello\n") {
-        throw new Error("driver exec did not return the expected echo output");
+      if (driver.capabilities().hardwareIsolation) {
+        await transportHost.waitForRuntimeCall(prepared.transport);
+      } else {
+        const result = await driver.exec(handle, { argv: ["/bin/echo", "hello"] });
+        if (result.exitCode !== 0 || result.stdout !== "hello\n") {
+          throw new Error("driver exec did not return the expected echo output");
+        }
       }
     } finally {
       await destroyAndRelease(driver, prepared, transportHost);
@@ -164,10 +238,7 @@ async function measureRestore(driver, snapshot) {
     await driver.start(prepared.handle);
     const handle = prepared.handle;
     try {
-      const result = await driver.exec(handle, { argv: ["/bin/echo", "hello"] });
-      if (result.exitCode !== 0 || result.stdout !== "hello\n") {
-        throw new Error("restored driver exec did not return the expected echo output");
-      }
+      // start() returns only after the restored runtime acknowledges fresh entropy.
     } finally {
       await destroyAndRelease(driver, prepared, transportHost);
     }
@@ -226,7 +297,7 @@ if (driverName === "container") {
 } else {
   const snapshotStore = createSnapshotStore();
   const driver = await createFirecrackerDriver(snapshotStore);
-  const coldDurations = await measureCreate(driver, "m1-dev-probe");
+  const coldDurations = await measureCreate(driver, "caisson-runtime");
   results.push({
     driver: "firecracker",
     kind: "cold",
@@ -235,8 +306,8 @@ if (driverName === "container") {
         ? "local kernel and rootfs; S3 snapshot retrieval is not measured"
         : "S3-backed rootfs staged into the verified local cache",
     samples,
-    timingModel: "prepare_start_exec_destroy",
-    execution: "prepare, start, infrastructure exec(/bin/echo hello), destroy",
+    timingModel: "prepare_start_broker_call_destroy",
+    execution: "prepare, start, entropy acknowledgement, framed broker.call round trip, destroy",
     p50Ms: percentile(coldDurations, 0.5),
     p99Ms: percentile(coldDurations, 0.99),
     samplesMs: coldDurations,
@@ -251,10 +322,11 @@ if (driverName === "container") {
   try {
     sourceTransportHost = new BenchmarkTransportHost();
     sourcePrepared = await driver.prepare(
-      { id: randomUUID(), image: "m1-dev-probe" },
+      { id: randomUUID(), image: "caisson-runtime" },
       sourceTransportHost,
     );
     await driver.start(sourcePrepared.handle);
+    await sourceTransportHost.waitForRuntimeCall(sourcePrepared.transport);
     source = sourcePrepared.handle;
     snapshot = await driver.snapshot(source, "base");
   } finally {
@@ -278,8 +350,8 @@ if (driverName === "container") {
           ? "local base snapshot"
           : "S3 base snapshot resolved from a verified local cache hit",
       samples,
-      timingModel: "restore_exec_destroy",
-      execution: "restore, infrastructure exec(/bin/echo hello), destroy",
+      timingModel: "restore_entropy_refresh_destroy",
+      execution: "restore, confirmed fresh entropy acknowledgement, destroy",
       p50Ms: percentile(warmDurations, 0.5),
       p99Ms: percentile(warmDurations, 0.99),
       samplesMs: warmDurations,
@@ -307,5 +379,5 @@ await writeFile(
     .map(([key, value]) => `- ${key}: ${value}`)
     .join(
       "\n",
-    )}\n\nMeasurements with timingModel prepare_start_exec_destroy supersede the pre-ADR-18 create_exec_destroy results. The lifecycle boundary changed, so the two result sets are not comparable.\n`,
+    )}\n\nMeasurements with timingModel prepare_start_broker_call_destroy and restore_entropy_refresh_destroy are M-2 runtime measurements. They are not comparable to M-1 probe measurements or pre-runtime prepare/start measurements because the guest, readiness gate, and timed work changed.\n`,
 );

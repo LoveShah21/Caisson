@@ -25,13 +25,33 @@ describe("Firecracker M-1 development probe boundary", () => {
     try {
       await expect(
         driver.prepare({ id: "probe-refusal", image: "m1-dev-probe" }, transportHost),
-      ).rejects.toThrow("production refuses the M-1 development probe rootfs");
+      ).rejects.toThrow("production refuses an ineligible development or diagnostic rootfs");
     } finally {
       if (previous === undefined) {
         delete process.env.CAISSON_ENV;
       } else {
         process.env.CAISSON_ENV = previous;
       }
+    }
+  });
+
+  it("refuses the diagnostic runtime rootfs in production before host checks", async () => {
+    const previous = process.env.CAISSON_ENV;
+    process.env.CAISSON_ENV = "production";
+    const driver = new FirecrackerDriver({
+      firecrackerPath: "/not-used/firecracker",
+      kernelImagePath: "/not-used/vmlinux",
+      rootfsPath: "/not-used/caisson-runtime-diagnostic-rootfs.ext4",
+      runtimeDirectory: "/not-used/runtime",
+      snapshotDirectory: "/not-used/snapshots",
+    });
+    try {
+      await expect(
+        driver.prepare({ id: "diagnostic-refusal", image: "diagnostic" }, transportHost),
+      ).rejects.toThrow("production refuses an ineligible development or diagnostic rootfs");
+    } finally {
+      if (previous === undefined) delete process.env.CAISSON_ENV;
+      else process.env.CAISSON_ENV = previous;
     }
   });
 });

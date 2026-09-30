@@ -1,15 +1,16 @@
 import type { SpawnOptions } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import net from "node:net";
 import { access, constants, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CaissonError, type DriverCapabilities } from "@caisson/protocol";
+import { BrokerCallRequestSchema, CaissonError, type DriverCapabilities } from "@caisson/protocol";
 
 import { callFirecrackerApi } from "./firecracker-api.js";
 import {
   firecrackerRootfsDriveConfig,
-  isM1DevelopmentProbeRootfs,
+  isIneligibleBaseRootfs,
 } from "./firecracker-drive-config.js";
 import type {
   ExecRequest,
@@ -25,9 +26,12 @@ import type {
 } from "./types.js";
 import { CAISSON_INFRA_PROBE_PORT } from "./vsock-infrastructure-probe.js";
 
+const CAISSON_RUNTIME_ENTROPY_PORT = 1025;
+
 const DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off";
 const DEFAULT_GUEST_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_CONCURRENT = 50;
+const MAX_RUNTIME_BOOT_REQUEST_BYTES = 2048;
 
 export interface InfrastructureProbe {
   waitForReady(context: InfrastructureProbeContext, timeoutMs: number): Promise<void>;
@@ -36,6 +40,60 @@ export interface InfrastructureProbe {
     request: ExecRequest,
     context: InfrastructureProbeContext,
   ): Promise<ExecResult>;
+}
+
+function withOneShotBrokerRequest(bootArgs: string, request: unknown): string {
+  if (request === undefined) return bootArgs;
+  const parsed = BrokerCallRequestSchema.safeParse(request);
+  if (!parsed.success)
+    throw new CaissonError("PARAMS_INVALID", "runtime broker request is invalid");
+  const encoded = Buffer.from(JSON.stringify(parsed.data), "utf8").toString("base64url");
+  if (Buffer.byteLength(encoded) > MAX_RUNTIME_BOOT_REQUEST_BYTES) {
+    throw new CaissonError("PARAMS_INVALID", "runtime broker request exceeds boot parameter limit");
+  }
+  return `${bootArgs} caisson.broker_request_b64=${encoded}`;
+}
+
+async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.createConnection(vsockPath);
+    let reply = "";
+    let sentEntropy = false;
+    let settled = false;
+    const finish = (error?: CaissonError) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const timer = setTimeout(() => {
+      finish(new CaissonError("SANDBOX_FAILED", "guest entropy confirmation timed out"));
+    }, 30_000);
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write(`CONNECT ${CAISSON_RUNTIME_ENTROPY_PORT}\n`));
+    socket.on("data", (chunk: string) => {
+      reply += chunk;
+      const newline = reply.indexOf("\n");
+      if (newline === -1) return;
+      if (!/^OK \d+$/u.test(reply.slice(0, newline))) {
+        finish(new CaissonError("SANDBOX_FAILED", "guest entropy CONNECT was rejected"));
+        return;
+      }
+      const rest = reply.slice(newline + 1);
+      if (!sentEntropy) {
+        sentEntropy = true;
+        socket.write(randomBytes(32));
+      }
+      if (rest.includes("ENTROPY_OK\n")) {
+        finish();
+      }
+    });
+    socket.once("error", (error) => {
+      finish(new CaissonError("SANDBOX_FAILED", "guest entropy refresh failed", undefined, error));
+    });
+  });
 }
 
 export interface InfrastructureProbeContext {
@@ -56,6 +114,7 @@ export interface FirecrackerDriverOptions {
   readonly maxConcurrent?: number;
   readonly bootArgs?: string;
   readonly infrastructureProbe?: InfrastructureProbe;
+  readonly oneShotBrokerRequest?: unknown;
 }
 
 interface FirecrackerRecord {
@@ -82,11 +141,14 @@ export function firecrackerProcessSpawnOptions(logFileDescriptor: number): Spawn
  * microVM has no route other than its explicitly configured vsock device.
  */
 export class FirecrackerDriver implements IsolationDriver {
-  readonly #options: Required<Omit<FirecrackerDriverOptions, "infrastructureProbe">> &
-    Pick<FirecrackerDriverOptions, "infrastructureProbe">;
+  readonly #options: Required<
+    Omit<FirecrackerDriverOptions, "infrastructureProbe" | "oneShotBrokerRequest">
+  > &
+    Pick<FirecrackerDriverOptions, "infrastructureProbe" | "oneShotBrokerRequest">;
   readonly #records = new Map<string, FirecrackerRecord>();
   readonly #releasedGuestCids = new Set<number>();
   readonly #allocatedGuestCids = new Map<string, number>();
+  readonly #bootArgs: string;
   #nextGuestCid: number;
 
   constructor(options: FirecrackerDriverOptions) {
@@ -100,6 +162,7 @@ export class FirecrackerDriver implements IsolationDriver {
       bootArgs: options.bootArgs ?? DEFAULT_BOOT_ARGS,
     };
     this.#nextGuestCid = this.#options.guestCidStart;
+    this.#bootArgs = withOneShotBrokerRequest(this.#options.bootArgs, options.oneShotBrokerRequest);
   }
 
   capabilities(): DriverCapabilities {
@@ -141,7 +204,7 @@ export class FirecrackerDriver implements IsolationDriver {
       });
       await this.#callApi(record, "PUT", "/boot-source", {
         kernel_image_path: this.#options.kernelImagePath,
-        boot_args: this.#options.bootArgs,
+        boot_args: this.#bootArgs,
       });
       await this.#callApi(
         record,
@@ -174,7 +237,11 @@ export class FirecrackerDriver implements IsolationDriver {
     } else {
       await this.#callApi(record, "PUT", "/actions", { action_type: "InstanceStart" });
     }
-    await this.#waitForGuestReady(record);
+    if (this.#options.oneShotBrokerRequest !== undefined) {
+      await refreshRuntimeEntropy(record.vsockPath);
+    } else {
+      await this.#waitForGuestReady(record);
+    }
   }
 
   async exec(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult> {
@@ -311,10 +378,10 @@ export class FirecrackerDriver implements IsolationDriver {
 
   #assertProductionRootfs(): void {
     const environment: unknown = Reflect.get(process.env, "CAISSON_ENV");
-    if (environment === "production" && isM1DevelopmentProbeRootfs(this.#options.rootfsPath)) {
+    if (environment === "production" && isIneligibleBaseRootfs(this.#options.rootfsPath)) {
       throw new CaissonError(
         "SANDBOX_FAILED",
-        "production refuses the M-1 development probe rootfs",
+        "production refuses an ineligible development or diagnostic rootfs",
       );
     }
   }
