@@ -156,7 +156,13 @@ describe("INV-1: no secret in a Firecracker guest", () => {
         scopes: ["warehouse.readonly"],
         expiresAt: new Date("2026-12-31T00:00:00Z"),
       });
-      await identities.bind({ sessionId, tokenId: token.id, ...prepared.transport });
+      await identities.bind({
+        sessionId,
+        tokenId: token.id,
+        hostId: prepared.transport.hostId,
+        transportKind: prepared.transport.kind,
+        peerIdentifier: prepared.transport.peerIdentifier,
+      });
       const logs: string[] = [];
       const originalError = console.error;
       const originalLog = console.log;
