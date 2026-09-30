@@ -296,6 +296,9 @@ if (driverName === "container") {
   });
 } else {
   const snapshotStore = createSnapshotStore();
+  // Storage availability is a prerequisite, not part of the timed run. This
+  // prevents a failed MinIO/S3 connection from wasting 200 cold samples.
+  if (snapshotStore !== undefined) await snapshotStore.ensureBucket();
   const driver = await createFirecrackerDriver(snapshotStore);
   const coldDurations = await measureCreate(driver, "caisson-runtime");
   results.push({
@@ -373,6 +376,7 @@ for (const result of results) {
     result.driver === "container" ? "boot-container.json" : `boot-firecracker-${result.kind}.json`;
   await writeFile(new URL(filename, outputDirectory), `${JSON.stringify(result, null, 2)}\n`);
 }
+process.stdout.write(`PASS wrote ${results.length} benchmark result file(s)\n`);
 await writeFile(
   new URL("machine.md", outputDirectory),
   `${Object.entries(machine)
