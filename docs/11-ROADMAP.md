@@ -29,6 +29,9 @@ FR-1 to FR-6, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 - [x] Run the live Firecracker vsock broker path and prove FR-17a entropy distinctness on KVM-capable WSL2/Linux before a restored guest becomes ready.
 - [x] Record an S3 cache-hit warm-restore measurement only after the eligible runtime rootfs exists and the cache-hit benchmark has run on KVM. The M-2 runtime measurement is p50 177 ms and p99 226 ms over 200 samples; its timing model is intentionally non-comparable to earlier measurements.
 - [x] Run the Firecracker case of INV-7 in KVM-capable WSL2/Linux using an eligible non-M-1 runtime rootfs.
+- [x] Run a real Postgres query from the diagnostic guest over Firecracker vsock through identity resolution, policy evaluation, the critical-path audit record, credential resolution, and the Postgres adapter. Verify a distinct credential canary is absent from guest-visible messages, guest environment, process arguments, filesystem footprint, audit records and outbox, spans, and captured logs. INV-1.
+- [x] Assert immediately before base-snapshot capture that every recorded guest-visible broker message is free of secret-shaped material. ADR-38.
+- [x] Record the steady-state broker-overhead measurement with 20 warmups and 200 samples. The 2026-09-30 WSL2 result is p50 21.532 ms and p99 40.562 ms, meeting NFR-2's p99 target of less than 50 ms. `benchmarks/results/broker-overhead.json`.
 
 **Follow-up work, not a claim of M-2 gate completion:**
 
@@ -41,7 +44,7 @@ FR-1 to FR-6, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 - Forged identity fields in guest requests change nothing.
 - `bench-broker.mjs` records overhead against NFR-2.
 
-**Current status:** Stages A through E are implemented and their completed checks above have been run. M-2 is not accepted or tagged: the full gate still requires INV-1, the broker-overhead benchmark, and final CI verification. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
+**Current status:** Stages A through E are implemented. The M-2 gate evidence above, including the KVM-only INV-1 proof, the broker-overhead measurement, and CI, has been recorded. M-2 is intentionally not accepted or tagged pending final review. INV-2 and FR-7 are deferred to M-4 by ADR-40 and ADR-41. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
 
 **M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The Firecracker case subsequently passed during M-2 on a KVM-capable WSL2 environment using the eligible diagnostic runtime rootfs. An unavailable KVM environment must still report an explicit skipped Firecracker case rather than a passing result.
 
