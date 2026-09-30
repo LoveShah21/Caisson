@@ -80,6 +80,14 @@ describe("Postgres audit outbox", () => {
     expect(await clickhouse.query(countQuery(sessionId, 3))).toBe("1\n");
   });
 
+  it("inserts a first delivery without a redundant existence lookup", async () => {
+    const writer = new AuditOutboxWriter(postgres.sql, new FirstDeliverySink(sink));
+
+    await writer.persistBeforeExecution(lifecycleInput("018f0000-0000-7000-8000-000000000109"));
+
+    expect(await clickhouse.query(countQuery(sessionId, 4))).toBe("1\n");
+  });
+
   it("rejects raw parameter, credential, secret, and result payload fields in Postgres", async () => {
     await expect(
       postgres.sql`
@@ -161,6 +169,22 @@ class TimeoutAfterCommitSink implements AuditSink {
       this.#hasTimedOut = true;
       throw new Error("simulated client timeout after ClickHouse committed the insert");
     }
+  }
+}
+
+class FirstDeliverySink implements AuditSink {
+  readonly #sink: AuditSink;
+
+  constructor(sink: AuditSink) {
+    this.#sink = sink;
+  }
+
+  async hasEvent(): Promise<boolean> {
+    throw new Error("first delivery must not query ClickHouse for an existing event");
+  }
+
+  async insert(event: StoredAuditEvent): Promise<void> {
+    await this.#sink.insert(event);
   }
 }
 

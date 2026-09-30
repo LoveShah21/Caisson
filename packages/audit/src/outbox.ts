@@ -94,6 +94,7 @@ interface OutboxRow {
   readonly session_id: string;
   readonly seq: number;
   readonly payload: AuditPayload;
+  readonly delivery_attempts: number;
 }
 
 export interface AuditSink {
@@ -157,7 +158,7 @@ export class AuditOutboxWriter {
       await this.#sql.begin(async (transaction) => {
         await transaction`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
         const rows = await transaction<OutboxRow[]>`
-          SELECT id, session_id, seq, payload
+          SELECT id, session_id, seq, payload, delivery_attempts
           FROM audit_outbox
           WHERE session_id = ${sessionId} AND delivery_state = 'pending'
           ORDER BY seq
@@ -172,7 +173,13 @@ export class AuditOutboxWriter {
             seq: row.seq,
             payload: row.payload,
           };
-          if (!(await this.#sink.hasEvent(event.sessionId, event.seq))) {
+          // A prior attempt may have committed at ClickHouse even when its
+          // client observed a timeout. Only retries need the existence query.
+          // First delivery goes straight to the insert, avoiding an otherwise
+          // redundant network round trip on the critical pre-execution path.
+          const alreadyDelivered =
+            row.delivery_attempts > 0 && (await this.#sink.hasEvent(event.sessionId, event.seq));
+          if (!alreadyDelivered) {
             await this.#sink.insert(event);
           }
           await transaction`
