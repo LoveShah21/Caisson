@@ -21,4 +21,6 @@ debugfs -w -R "sif /dev/null mode 020666" "$output" >/dev/null
 debugfs -w -R "sif /dev/random mode 020666" "$output" >/dev/null
 debugfs -w -R "sif /dev/urandom mode 020666" "$output" >/dev/null
 debugfs -R 'stat /init' "$output" | grep -q 'Mode:.*0100755'
-node "$root/../scripts/check-runtime-rootfs-inventory.mjs" "$output"
+if [ "$(basename "$output")" = "caisson-runtime-rootfs.ext4" ]; then
+  node "$root/../scripts/check-runtime-rootfs-inventory.mjs" "$output"
+fi

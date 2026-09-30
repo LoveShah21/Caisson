@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,21 @@ describe("M-2 runtime rootfs inventory", () => {
             encoding: "utf8",
           }),
         ).toThrow(/unexpected paths/u);
+
+        const diagnosticRootfs = join(directory, "caisson-runtime-diagnostic-rootfs.ext4");
+        execFileSync(
+          "bash",
+          ["guest/rootfs/build-runtime-diagnostic-rootfs.sh", diagnosticRootfs],
+          {
+            encoding: "utf8",
+          },
+        );
+        await expect(access(diagnosticRootfs)).resolves.toBeUndefined();
+        expect(() =>
+          execFileSync("node", ["scripts/check-runtime-rootfs-inventory.mjs", diagnosticRootfs], {
+            encoding: "utf8",
+          }),
+        ).toThrow(/only accepts the production runtime rootfs/u);
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
