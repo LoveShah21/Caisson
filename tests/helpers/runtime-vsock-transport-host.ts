@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ export class RuntimeVsockTransportHost implements TransportHost {
   readonly messages: string[] = [];
   readonly #attachments = new Map<string, TransportAttachment>();
   readonly #servers = new Map<string, net.Server>();
-  readonly #root = join(tmpdir(), "caisson-runtime-vsock-tests");
+  readonly #root = join(tmpdir(), "caisson-runtime-vsock-tests", randomUUID());
 
   async reserve(descriptor: TransportDescriptor): Promise<TransportAttachment> {
     if (descriptor.kind !== "vsock") throw new Error("runtime fixture requires a vsock descriptor");

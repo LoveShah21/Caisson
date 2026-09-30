@@ -36,5 +36,7 @@ describe("M-2 runtime rootfs inventory", () => {
 });
 
 function commandAvailable(command: string): boolean {
-  return spawnSync(command, ["--version"], { stdio: "ignore" }).status === 0;
+  // The rootfs builder checks command availability rather than whether every
+  // tool accepts a common --version flag. debugfs and mkfs.ext4 differ there.
+  return spawnSync("bash", ["-c", `command -v ${command}`], { stdio: "ignore" }).status === 0;
 }

@@ -21,6 +21,7 @@ import type {
   ResolvedSnapshot,
   SandboxHandle,
   SandboxSpec,
+  TransportAttachment,
   TransportDescriptor,
   TransportHost,
 } from "./types.js";
@@ -32,6 +33,17 @@ const DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off";
 const DEFAULT_GUEST_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_CONCURRENT = 50;
 const MAX_RUNTIME_BOOT_REQUEST_BYTES = 2048;
+
+interface GuestCidPool {
+  next: number;
+  readonly released: Set<number>;
+  readonly allocated: Map<string, number>;
+}
+
+// CID identity belongs to the host, not to an individual driver object. A
+// process can construct more than one driver during recovery or test setup;
+// each still represents the same host-level allocation domain.
+const guestCidPools = new Map<string, GuestCidPool>();
 
 export interface InfrastructureProbe {
   waitForReady(context: InfrastructureProbeContext, timeoutMs: number): Promise<void>;
@@ -55,12 +67,45 @@ function withOneShotBrokerRequest(bootArgs: string, request: unknown): string {
 }
 
 async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
+  const deadline = performance.now() + DEFAULT_GUEST_READY_TIMEOUT_MS;
+  let lastError: unknown;
+  while (performance.now() < deadline) {
+    const remainingMs = Math.max(1, Math.round(deadline - performance.now()));
+    try {
+      await refreshRuntimeEntropyOnce(vsockPath, Math.min(remainingMs, 1_000));
+      return;
+    } catch (error: unknown) {
+      if (!(error instanceof EntropyConnectionError) || !error.retryable) {
+        throw new CaissonError("SANDBOX_FAILED", "guest entropy refresh failed", undefined, error);
+      }
+      lastError = error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new CaissonError(
+    "SANDBOX_FAILED",
+    "guest entropy confirmation timed out",
+    undefined,
+    lastError,
+  );
+}
+
+class EntropyConnectionError extends Error {
+  constructor(
+    readonly retryable: boolean,
+    cause: unknown,
+  ) {
+    super("guest entropy refresh failed", { cause });
+  }
+}
+
+async function refreshRuntimeEntropyOnce(vsockPath: string, timeoutMs: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const socket = net.createConnection(vsockPath);
     let reply = "";
     let sentEntropy = false;
     let settled = false;
-    const finish = (error?: CaissonError) => {
+    const finish = (error?: EntropyConnectionError) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -69,8 +114,8 @@ async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
       else reject(error);
     };
     const timer = setTimeout(() => {
-      finish(new CaissonError("SANDBOX_FAILED", "guest entropy confirmation timed out"));
-    }, 30_000);
+      finish(new EntropyConnectionError(true, "guest entropy connection timed out"));
+    }, timeoutMs);
     socket.setEncoding("utf8");
     socket.once("connect", () => socket.write(`CONNECT ${CAISSON_RUNTIME_ENTROPY_PORT}\n`));
     socket.on("data", (chunk: string) => {
@@ -78,7 +123,7 @@ async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
       const newline = reply.indexOf("\n");
       if (newline === -1) return;
       if (!/^OK \d+$/u.test(reply.slice(0, newline))) {
-        finish(new CaissonError("SANDBOX_FAILED", "guest entropy CONNECT was rejected"));
+        finish(new EntropyConnectionError(false, "Firecracker entropy CONNECT was rejected"));
         return;
       }
       const rest = reply.slice(newline + 1);
@@ -86,12 +131,19 @@ async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
         sentEntropy = true;
         socket.write(randomBytes(32));
       }
+      if (rest.includes("ENTROPY_ERROR\n")) {
+        finish(new EntropyConnectionError(false, "guest rejected the entropy refresh"));
+        return;
+      }
       if (rest.includes("ENTROPY_OK\n")) {
         finish();
       }
     });
     socket.once("error", (error) => {
-      finish(new CaissonError("SANDBOX_FAILED", "guest entropy refresh failed", undefined, error));
+      finish(new EntropyConnectionError(true, error));
+    });
+    socket.once("close", () => {
+      if (!settled) finish(new EntropyConnectionError(true, "guest entropy connection closed"));
     });
   });
 }
@@ -146,10 +198,8 @@ export class FirecrackerDriver implements IsolationDriver {
   > &
     Pick<FirecrackerDriverOptions, "infrastructureProbe" | "oneShotBrokerRequest">;
   readonly #records = new Map<string, FirecrackerRecord>();
-  readonly #releasedGuestCids = new Set<number>();
-  readonly #allocatedGuestCids = new Map<string, number>();
+  readonly #guestCidPool: GuestCidPool;
   readonly #bootArgs: string;
-  #nextGuestCid: number;
 
   constructor(options: FirecrackerDriverOptions) {
     this.#options = {
@@ -161,7 +211,7 @@ export class FirecrackerDriver implements IsolationDriver {
       maxConcurrent: options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT,
       bootArgs: options.bootArgs ?? DEFAULT_BOOT_ARGS,
     };
-    this.#nextGuestCid = this.#options.guestCidStart;
+    this.#guestCidPool = getGuestCidPool(this.#options.hostId, this.#options.guestCidStart);
     this.#bootArgs = withOneShotBrokerRequest(this.#options.bootArgs, options.oneShotBrokerRequest);
   }
 
@@ -186,7 +236,13 @@ export class FirecrackerDriver implements IsolationDriver {
       hostId: this.#options.hostId,
       peerIdentifier: String(guestCid),
     };
-    const attachment = await transportHost.reserve(transport);
+    let attachment: TransportAttachment;
+    try {
+      attachment = await transportHost.reserve(transport);
+    } catch (error: unknown) {
+      this.#releaseGuestCid(spec.id);
+      throw error;
+    }
     if (
       attachment.descriptor.kind !== transport.kind ||
       attachment.descriptor.hostId !== transport.hostId ||
@@ -313,7 +369,13 @@ export class FirecrackerDriver implements IsolationDriver {
       hostId: this.#options.hostId,
       peerIdentifier: String(guestCid),
     };
-    const attachment = await transportHost.reserve(transport);
+    let attachment: TransportAttachment;
+    try {
+      attachment = await transportHost.reserve(transport);
+    } catch (error: unknown) {
+      this.#releaseGuestCid(spec.id);
+      throw error;
+    }
     if (
       attachment.descriptor.kind !== transport.kind ||
       attachment.descriptor.hostId !== transport.hostId ||
@@ -517,27 +579,42 @@ export class FirecrackerDriver implements IsolationDriver {
   }
 
   #allocateGuestCid(sessionId: string): number {
-    const reusable = [...this.#releasedGuestCids].sort((left, right) => left - right)[0];
-    const guestCid = reusable ?? this.#nextGuestCid++;
+    const reusable = [...this.#guestCidPool.released].sort((left, right) => left - right)[0];
+    const guestCid = reusable ?? this.#guestCidPool.next++;
     if (reusable !== undefined) {
-      this.#releasedGuestCids.delete(reusable);
+      this.#guestCidPool.released.delete(reusable);
     }
-    if ([...this.#allocatedGuestCids.values()].includes(guestCid)) {
+    if (this.#guestCidPool.allocated.has(sessionId)) {
+      throw new CaissonError("SANDBOX_FAILED", "Firecracker session already has a guest CID");
+    }
+    if ([...this.#guestCidPool.allocated.values()].includes(guestCid)) {
       throw new CaissonError("SANDBOX_FAILED", "Firecracker guest CID allocation collision");
     }
-    this.#allocatedGuestCids.set(sessionId, guestCid);
+    this.#guestCidPool.allocated.set(sessionId, guestCid);
     return guestCid;
   }
 
   #releaseGuestCid(sessionId: string): void {
-    const guestCid = this.#allocatedGuestCids.get(sessionId);
+    const guestCid = this.#guestCidPool.allocated.get(sessionId);
     if (guestCid !== undefined) {
-      this.#allocatedGuestCids.delete(sessionId);
-      this.#releasedGuestCids.add(guestCid);
+      this.#guestCidPool.allocated.delete(sessionId);
+      this.#guestCidPool.released.add(guestCid);
     }
   }
 
   #safePathSegment(value: string): string {
     return value.replaceAll(/[^a-zA-Z0-9_.-]/g, "").slice(0, 48);
   }
+}
+
+function getGuestCidPool(hostId: string, guestCidStart: number): GuestCidPool {
+  const existing = guestCidPools.get(hostId);
+  if (existing !== undefined) return existing;
+  const pool: GuestCidPool = {
+    next: guestCidStart,
+    released: new Set<number>(),
+    allocated: new Map<string, number>(),
+  };
+  guestCidPools.set(hostId, pool);
+  return pool;
 }

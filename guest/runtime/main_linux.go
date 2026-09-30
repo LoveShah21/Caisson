@@ -171,6 +171,10 @@ func serveEntropyControl(firstReady chan<- error) {
 			return
 		}
 		err := mixEntropy(int(connection))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "caisson runtime: entropy mix failed: %v\n", err)
+			_, _ = syscall.Write(int(connection), []byte("ENTROPY_ERROR\n"))
+		}
 		syscall.Close(int(connection))
 		if first {
 			firstReady <- err
