@@ -176,10 +176,14 @@ export class S3Adapter {
       if (response.IsTruncated) {
         throw new CaissonError("SERVICE_ERROR", "S3 list exceeds configured limit");
       }
-      return {
+      const result = {
         keys:
           response.Contents?.flatMap((item) => (item.Key === undefined ? [] : [item.Key])) ?? [],
       };
+      if (Buffer.byteLength(JSON.stringify(result), "utf8") > this.#config.objectSizeBytes) {
+        throw new CaissonError("SERVICE_ERROR", "S3 list response exceeds configured size limit");
+      }
+      return result;
     } catch (error: unknown) {
       throw serviceError(error);
     }

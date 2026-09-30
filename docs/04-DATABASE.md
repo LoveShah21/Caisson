@@ -152,9 +152,51 @@ CREATE TABLE credential_refs (
 CREATE UNIQUE INDEX ON credential_refs (service_id, role);
 ```
 
-A `CHECK` constraint and a CI grep must both enforce that nothing resembling a secret lands in `backend_path` or `config`. Add a test that inserts a plausible secret and asserts rejection.
+A database `CHECK` and a CI grep both reject secret-shaped material in these
+metadata fields. `services.config` is recursively checked. Object keys are
+case-insensitive and separator-normalized, and reject `password`, `secret`,
+`token`, `apikey`, `privatekey`, `credential`, and `accesskey`. Every string
+value in `config`, and the `backend_path` string, reject an AWS access-key
+shape (`AKIA[A-Z0-9]{16}`), a PEM private-key header, a three-segment
+base64url JWT shape, or `sk-` followed by at least twenty alphanumeric
+characters. The check intentionally has false positives and does not use
+entropy heuristics. It is defence in depth. Credentials remain in the secret
+backend, never these tables.
 
-### 1.6 approvals
+`pnpm bootstrap:services` is the M-2 dev and self-hosted operator provisioning
+path. It reads a source-controlled declaration with service configuration and
+credential references, validates the complete declaration before opening a
+transaction, then upserts services by name and references by `(service_id,
+role)`. It is idempotent and never contains credential values. M-2 has no
+multi-tenant service-administration API.
+
+### 1.6 system_audit_events
+
+Administrative and development operations with no trustworthy session identity,
+including `POST /v1/policy/simulate`, use a separate Postgres audit table.
+They are not part of the per-session `actions` sequence or `audit_outbox`.
+
+```sql
+CREATE TABLE system_audit_events (
+  id UUID PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  event_type TEXT NOT NULL,
+  input_hash TEXT NOT NULL,                 -- SHA-256, never raw policy input
+  outcome TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  trace_id TEXT NOT NULL,
+  span_id TEXT NOT NULL,
+  caller_connection TEXT                    -- nullable; no verified caller in M-2
+);
+```
+
+The writer runs the same secret-shaped-value detector before it hashes or
+stores anything derived from policy input. It writes directly to Postgres,
+rather than the session outbox, because there is no session sequence to order
+or deliver to ClickHouse. `caller_connection` is connection metadata only and
+is deliberately nullable: M-2 does not claim an authenticated caller.
+
+### 1.7 approvals
 
 ```sql
 CREATE TYPE approval_state AS ENUM ('pending','approved','denied','timed_out','cancelled');
@@ -181,7 +223,7 @@ CREATE UNIQUE INDEX ON approvals (nonce);
 CREATE INDEX ON approvals (state, expires_at) WHERE state = 'pending';
 ```
 
-### 1.7 snapshots
+### 1.8 snapshots
 
 ```sql
 CREATE TABLE snapshots (
@@ -208,7 +250,7 @@ promotion is a single transaction updating a pointer row in `settings`, so
 FR-14 holds without a race. Per-session snapshot retention and encryption are
 separate FR-16 work.
 
-### 1.8 settings
+### 1.9 settings
 
 ```sql
 CREATE TABLE settings (
@@ -228,7 +270,7 @@ setting. The setting value is `{ "policyBundleId": "<uuid>" }`. Bootstrap
 requires all Postgres migrations to have run. Bootstrap failure prevents session
 creation rather than creating a session without a policy bundle.
 
-### 1.9 audit_outbox
+### 1.10 audit_outbox
 
 ```sql
 CREATE TABLE audit_outbox (
@@ -254,7 +296,7 @@ session at a time, in sequence order. Before retrying an ambiguous ClickHouse
 insert, the writer queries `(session_id, seq)` and skips the insert when it
 already exists. A pending outbox row means delivery lag, not a missing event.
 
-### 1.10 Entity relationships
+### 1.11 Entity relationships
 
 ```
 policy_bundles 1---* sessions 1---* session_tokens 1---* transport_bindings

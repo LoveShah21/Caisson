@@ -57,6 +57,8 @@ async function applyMigrations(sql: Sql): Promise<void> {
     "0003_m2_generalize_transport_bindings.sql",
     "0004_m2_audit_outbox.sql",
     "0005_m2_base_snapshot_storage.sql",
+    "0006_m2_services.sql",
+    "0007_m2_system_audit.sql",
   ]) {
     const source = await readFile(resolve("packages/db/migrations", migration), "utf8");
     await sql.unsafe(source);

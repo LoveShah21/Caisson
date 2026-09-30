@@ -350,3 +350,58 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** A host allowlist alone does not prevent DNS rebinding to private or metadata addresses. The HTTP adapter resolves the allowlisted hostname once with Node DNS, rejects prohibited IPv4 and IPv6 ranges, then connects to that exact IP with the original hostname retained only for TLS SNI and the Host header. Redirects, userinfo, and guest-supplied Host or Authorization headers are rejected. The existing pinned AWS S3 SDK is added directly to the broker package so S3 signing is not reimplemented. S3 bucket and prefix restrictions are enforced both by host configuration and by the credential's storage policy.
 
 **Consequences:** HTTP method scope and side-effect declarations are parameter-dependent: safe methods use `http.read` and mutating methods use `http.write`. Both remain computed before policy evaluation. S3 uses `s3.read`, `s3.write`, and `s3.delete`, preserving the `service.capability` convention. The broker never accepts an S3 endpoint override or creates a presigned URL.
+
+---
+
+## ADR-31: The broker evaluates the bootstrapped OPA WASM bundle in process
+**Status:** accepted
+
+**Alternatives:** Shell out to an `opa` binary for every request; reimplement the bootstrap policy in TypeScript; connect to a remote policy service.
+
+**Reasoning:** The policy bundle already produced by `pnpm bootstrap:policy` is the source selected for every session. A broker request must evaluate that exact stored WASM blob without adding a shell, a network hop, or a second policy representation. The pinned `@open-policy-agent/opa-wasm` runtime loads the bundle once and evaluates it in process. A bundle load or result-shape failure is an authorization failure, so startup and request handling fail closed. Policy simulation calls this same evaluator rather than a separate implementation.
+
+**Consequences:** `packages/policy` owns bundle loading, strict decision parsing, and evaluation. It is a reviewed dependency boundary. The control plane refuses readiness when its active bundle cannot load. Activating or reloading a bundle replaces the in-memory evaluator only after the new blob has loaded successfully.
+
+---
+
+## ADR-32: Broker frames are bounded UInt32BE JSON messages
+**Status:** accepted
+
+**Alternatives:** Newline-delimited JSON; an unbounded length prefix; one-mebibyte frames with response chunking; lower the configured adapter response caps.
+
+**Reasoning:** A four-byte unsigned big-endian length prefix is deterministic, permits UTF-8 JSON payloads containing newlines, and bounds allocation before payload parsing. The maximum payload is 16 MiB. Existing S3 and HTTP raw-byte response caps can expand under base64 encoding, so a one-mebibyte transport frame would reject permitted adapter results. Chunking adds state, ordering, partial-result, and audit complexity for a response that is already bounded. Reducing adapter caps to fit a transport limit would make the transport impose an arbitrary service restriction. Instead, startup computes the worst encoded frame from active adapter caps and refuses to start if it exceeds the protocol bound.
+
+**Consequences:** One malformed, oversize, timed-out, or truncated frame closes its socket and is never reused. Complete frames with invalid JSON or schema receive one diagnostic error frame when writable before close. Stage D tests the protocol over a host-bound loopback Unix socket. M-1's `VsockInfrastructureProbe` remains an infrastructure-only readiness probe and is not part of this request path. Live Firecracker guest-to-broker vsock remains Stage E work.
+
+---
+
+## ADR-33: Broker audit records use active OpenTelemetry span context
+**Status:** accepted
+
+**Alternatives:** Leave audit trace fields empty; generate unrelated identifiers in the audit writer; rewrite every existing instrumentation call site.
+
+**Reasoning:** FR-58 requires audit rows to join with the trace that represents the action. The existing instrumentation uses the OpenTelemetry API but has no SDK provider, so it cannot produce exportable span contexts. An SDK-backed tracer provider and optional OTLP exporter make current spans real without changing their call sites. Where export is not configured, the SDK still creates local span contexts; the production exporter configuration remains explicit.
+
+**Consequences:** The broker copies the active `traceId` and `spanId` into all action records. Span attributes remain hashes, sizes, types, and identifiers only. Trace export configuration never accepts or emits credentials through span attributes.
+
+---
+
+## ADR-34: Service metadata is bootstrapped and rejects secret-shaped values
+**Status:** accepted
+
+**Alternatives:** Store service configuration only in process memory; add a multi-tenant administration API in M-2; permit arbitrary metadata values because the secret backend is the primary control.
+
+**Reasoning:** The broker needs a durable trusted mapping from a service name to its host-side configuration and a credential reference. `pnpm bootstrap:services` follows the existing source-controlled policy bootstrap pattern and gives a self-hosted operator an idempotent path without introducing a tenant-facing administration surface. Database checks and CI scanning reject known secret-shaped values from metadata. This is defence in depth, not a substitute for the secret backend boundary. The detector deliberately accepts false positives because a rejected configuration is safer than durable credential material.
+
+**Consequences:** The bootstrap command validates its entire declaration before a single transaction upserts services by name and references by `(service_id, role)`. It rejects normalized key names `password`, `secret`, `token`, `apikey`, `privatekey`, `credential`, and `accesskey`, and values matching AWS access keys, PEM private-key headers, JWT shapes, or long `sk-` values. No entropy heuristic is used. M-2 has no multi-tenant service-administration API; adding one requires authentication and authorization design.
+
+---
+
+## ADR-35: Policy simulation uses a non-session system audit record in M-2
+**Status:** accepted
+
+**Alternatives:** Insert simulation records into `actions` with a fabricated session id; omit audit because the endpoint is administrative; introduce authentication in M-2.
+
+**Reasoning:** Policy simulation is development and administrative tooling, not a guest action. M-2 has no trusted caller identity and therefore cannot truthfully attach it to a session audit sequence. A separate direct Postgres record captures an input hash, outcome, duration, trace and span identifiers, and nullable connection metadata. The input is checked for secret-shaped values before anything derived from it is stored. The session outbox is intentionally not generalized because its order and recovery guarantees are defined per session.
+
+**Consequences:** `POST /v1/policy/simulate` fails closed when its system audit write fails. It records no placeholder identity. M-4 authenticated-caller work must revisit whether the endpoint requires authentication and whether these audit records should carry verified identity.

@@ -4,9 +4,9 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { S3Adapter } from "../../apps/broker/src/s3-adapter.js";
 import { SecretString } from "../../packages/secrets/src/credentials.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMinioFixture, type MinioFixture } from "../helpers/minio.js";
 

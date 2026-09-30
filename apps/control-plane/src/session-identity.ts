@@ -40,6 +40,11 @@ export interface BoundSessionIdentity {
   readonly roles: readonly string[];
   readonly approvalMode: "auto" | "rule" | "always";
   readonly policyBundleId: string;
+  readonly expiresAt: Date;
+  readonly requestedBy: string;
+  readonly purpose: string | null;
+  readonly driver: "container" | "firecracker";
+  readonly hardwareIsolated: boolean;
 }
 
 interface IdentityRow {
@@ -53,6 +58,10 @@ interface IdentityRow {
   readonly roles: string[];
   readonly approval_mode: "auto" | "rule" | "always";
   readonly policy_bundle_id: string;
+  readonly requested_by: string;
+  readonly purpose: string | null;
+  readonly driver: string | null;
+  readonly hardware_isolated: boolean;
 }
 
 export class SessionTokenService {
@@ -126,7 +135,11 @@ export class SessionIdentityResolver {
         session.scopes AS session_scopes,
         session.roles,
         session.approval_mode,
-        session.policy_bundle_id
+        session.policy_bundle_id,
+        session.requested_by,
+        session.purpose,
+        session.driver,
+        session.hardware_isolated
       FROM transport_bindings AS binding
       JOIN session_tokens AS token ON token.id = binding.token_id
       JOIN sessions AS session ON session.id = binding.session_id
@@ -146,6 +159,9 @@ export class SessionIdentityResolver {
     ) {
       throw new CaissonError("SESSION_EXPIRED", "bound session token is expired or revoked");
     }
+    if (identity.driver !== "container" && identity.driver !== "firecracker") {
+      throw new CaissonError("SESSION_NOT_READY", "bound session has no active isolation driver");
+    }
 
     return {
       sessionId: identity.session_id,
@@ -154,6 +170,11 @@ export class SessionIdentityResolver {
       roles: identity.roles,
       approvalMode: identity.approval_mode,
       policyBundleId: identity.policy_bundle_id,
+      expiresAt: identity.session_expires_at,
+      requestedBy: identity.requested_by,
+      purpose: identity.purpose,
+      driver: identity.driver,
+      hardwareIsolated: identity.hardware_isolated,
     };
   }
 }

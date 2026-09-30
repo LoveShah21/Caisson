@@ -134,6 +134,23 @@ export class AuditOutboxWriter {
     return this.enqueue(input);
   }
 
+  /**
+   * Startup and periodic recovery path. Session delivery retains its advisory
+   * lock, so concurrent control-plane and broker drainers cannot interleave a
+   * session's sequence.
+   */
+  async drainPending(): Promise<void> {
+    const sessions = await this.#sql<{ session_id: string }[]>`
+      SELECT DISTINCT session_id
+      FROM audit_outbox
+      WHERE delivery_state = 'pending'
+      ORDER BY session_id
+    `;
+    for (const session of sessions) {
+      await this.deliverSession(session.session_id);
+    }
+  }
+
   async deliverSession(sessionId: string): Promise<void> {
     let activeEventId: string | undefined;
     try {

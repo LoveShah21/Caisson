@@ -20,6 +20,7 @@
     "@caisson/audit": "workspace:*",
     "@caisson/db": "workspace:*",
     "@caisson/isolation": "workspace:*",
+    "@caisson/policy": "workspace:*",
     "@caisson/protocol": "workspace:*",
     "@caisson/telemetry": "workspace:*",
     "argon2": "^0.45.1",

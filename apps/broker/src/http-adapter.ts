@@ -30,6 +30,7 @@ export interface HttpAdapterConfig {
   readonly timeoutMs: number;
   readonly requestSizeBytes: number;
   readonly responseSizeBytes: number;
+  readonly responseHeaderBytes: number;
 }
 
 export interface HttpResponse {
@@ -132,6 +133,9 @@ export class HttpAdapter {
     if (response.body.length > this.#config.responseSizeBytes) {
       throw new CaissonError("SERVICE_ERROR", "HTTP response exceeds configured size limit");
     }
+    if (serializedHeaderBytes(response.headers) > this.#config.responseHeaderBytes) {
+      throw new CaissonError("SERVICE_ERROR", "HTTP response headers exceed configured size limit");
+    }
     if (response.status >= 300 && response.status < 400) {
       throw new CaissonError("SERVICE_ERROR", "HTTP redirects are not permitted");
     }
@@ -217,7 +221,12 @@ function assertConfig(config: HttpAdapterConfig): void {
   if (config.allowlist.length === 0 || config.allowedPorts.length === 0) {
     throw new CaissonError("PARAMS_INVALID", "HTTP allowlist and ports are required");
   }
-  for (const value of [config.timeoutMs, config.requestSizeBytes, config.responseSizeBytes]) {
+  for (const value of [
+    config.timeoutMs,
+    config.requestSizeBytes,
+    config.responseSizeBytes,
+    config.responseHeaderBytes,
+  ]) {
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new CaissonError("PARAMS_INVALID", "HTTP adapter limits must be positive integers");
     }
@@ -232,6 +241,15 @@ function assertConfig(config: HttpAdapterConfig): void {
       throw new CaissonError("PARAMS_INVALID", "HTTP allowlist entry is invalid");
     }
   }
+}
+
+function serializedHeaderBytes(headers: Readonly<Record<string, string>>): number {
+  return Buffer.byteLength(
+    Object.entries(headers)
+      .map(([key, value]) => `${key}: ${value}\r\n`)
+      .join(""),
+    "utf8",
+  );
 }
 
 function requiredScope(params: unknown): "http.read" | "http.write" {

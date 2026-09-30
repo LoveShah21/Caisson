@@ -100,7 +100,7 @@ For approver reconnect (FR-48).
 ### Policy administration
 - `POST /v1/policy/bundles` with `{ version, regoSource, notes }`. Compiles to wasm, runs the bundle's Rego tests, rejects on failure.
 - `POST /v1/policy/bundles/:id/activate`
-- `POST /v1/policy/simulate` with a full policy input document, returns the decision and matched rule names without executing the action. Each request writes an audit record with `action_type='policy_simulate'`; these records are excluded from real per-session replay views. This is how you debug policy without burning a session.
+- `POST /v1/policy/simulate` with a full policy input document, returns the decision and matched rule names without executing the action. Each request writes a non-session `system_audit_events` record with an input hash, outcome, duration, trace identifiers, and nullable connection metadata. It never fabricates a session or authenticated caller. This is how you debug policy without burning a session.
 
 ### Health
 - `GET /healthz` liveness.
@@ -129,7 +129,7 @@ Client to server: `subscribe`, `unsubscribe`, `approval.decide`, `question.answe
 
 ## 4. Guest to broker protocol
 
-Transport: vsock, length-prefixed frames, one request in flight per frame id. Never HTTP over a network interface, because a network interface is a thing the guest could otherwise reach.
+Transport: vsock, length-prefixed frames, one request in flight per frame id. Never HTTP over a network interface, because a network interface is a thing the guest could otherwise reach. A frame begins with a four-byte unsigned big-endian payload length (`UInt32BE`), followed by that many UTF-8 JSON payload bytes. The length excludes the prefix and may not exceed 16 MiB (16,777,216 bytes). The host reads no more than the declared bounded length. A declared oversize length, a read timeout, a truncated frame, or an unexpected close closes the connection without a response. A syntactically complete frame whose JSON or Zod schema is invalid receives one error frame when writable, then the connection closes. No connection is reused after a malformed frame.
 
 ### broker.call
 ```jsonc
@@ -156,6 +156,12 @@ Denial:
     "actionId": "018f..." } }
 ```
 Denials are structured so the agent can adapt rather than retry blindly (FR-45). `details` never leaks anything the agent was not already entitled to know.
+
+The broker's startup validation computes the largest response frame implied by
+the configured adapter raw-byte caps, including base64 inflation and response
+envelope overhead. Startup fails closed if that size exceeds the protocol
+limit. This prevents a later adapter-cap increase from silently producing an
+unframeable response.
 
 ### Other ops
 `fs.read`, `fs.write`, `fs.edit`, `fs.search`, `proc.exec`, `user.ask`. All cross the same vsock transport and are audited outside the guest. Together with `broker.call`, they are the seven operations covered by FR-55 and INV-4.

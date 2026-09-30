@@ -1,0 +1,21 @@
+{
+  "services": [
+    {
+      "name": "postgres",
+      "adapter": "postgres",
+      "config": {
+        "timeoutMs": 1000,
+        "statementTimeoutMs": 1000,
+        "rowLimit": 1000,
+        "resultSizeBytes": 1048576
+      },
+      "credentialRefs": [
+        {
+          "role": "default",
+          "backend": "env",
+          "backendPath": "CAISSON_POSTGRES_CREDENTIALS"
+        }
+      ]
+    }
+  ]
+}

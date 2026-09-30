@@ -28,11 +28,17 @@ Set generated values in `.env` before starting Compose.
 pnpm install
 docker compose --env-file .env --env-file deploy/minio/image.env -f deploy/docker-compose.yml up -d
 pnpm bootstrap:policy
+pnpm bootstrap:services
 ```
 
 `pnpm bootstrap:policy` compiles `policies/bootstrap/default.rego` with the
 pinned OPA image, stores the source and wasm bundle in Postgres, and creates
 `settings.active_policy_bundle` when none exists. It is idempotent.
+
+`pnpm bootstrap:services` applies the source-controlled non-secret service and
+credential-reference declaration in `services/bootstrap.json`. It is
+idempotent. Set the referenced credential values in the configured secret
+backend before starting a session.
 
 Verify that the active bundle exists:
 

@@ -1,5 +1,5 @@
-import { EnvSecretBackend, VaultSecretBackend } from "../../packages/secrets/src/index.js";
 import { describe, expect, it } from "vitest";
+import { EnvSecretBackend, VaultSecretBackend } from "../../packages/secrets/src/index.js";
 
 const document = JSON.stringify({
   kind: "postgres",

@@ -3,7 +3,16 @@ import { z } from "zod";
 import { ErrorCodeSchema } from "./errors.js";
 
 export const SessionIdSchema = z.string().uuid();
-export const TraceIdSchema = z.string().min(1);
+export const TraceIdSchema = z.string().min(1).max(128);
+export const BrokerFrameIdSchema = z.string().min(1).max(128);
+const BrokerErrorMessageSchema = z.string().min(1).max(512);
+const BrokerErrorDetailValueSchema = z.union([
+  z.string().max(512),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
+const BrokerErrorDetailsSchema = z.record(z.string().min(1).max(128), BrokerErrorDetailValueSchema);
 export const ApprovalModeSchema = z.enum(["auto", "rule", "always"]);
 export const IsolationDriverNameSchema = z.enum(["firecracker", "container"]);
 export const PolicyDecisionSchema = z.enum(["allow", "deny", "require_approval"]);
@@ -37,11 +46,48 @@ export const BrokerCallBodySchema = z
 
 export const BrokerCallRequestSchema = z
   .object({
-    id: z.string().min(1),
+    id: BrokerFrameIdSchema,
     op: z.literal("broker.call"),
     body: BrokerCallBodySchema,
   })
   .strict();
+
+export const BrokerCallResponseSchema = z.union([
+  z
+    .object({
+      id: BrokerFrameIdSchema,
+      ok: z.literal(true),
+      body: z
+        .object({
+          result: z.json(),
+          meta: z
+            .object({
+              durationMs: z.number().int().nonnegative(),
+              redactionCount: z.number().int().nonnegative(),
+              roleUsed: z.string().max(128),
+              actionId: SessionIdSchema,
+              truncated: z.boolean().optional(),
+            })
+            .strict(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      id: BrokerFrameIdSchema,
+      ok: z.literal(false),
+      error: z
+        .object({
+          code: ErrorCodeSchema,
+          message: BrokerErrorMessageSchema,
+          details: BrokerErrorDetailsSchema,
+          actionId: SessionIdSchema.optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 export const DriverCapabilitiesSchema = z
   .object({
@@ -118,8 +164,8 @@ export const ErrorResponseSchema = z
     error: z
       .object({
         code: ErrorCodeSchema,
-        message: z.string(),
-        details: z.record(z.string(), z.unknown()),
+        message: BrokerErrorMessageSchema,
+        details: BrokerErrorDetailsSchema,
         traceId: TraceIdSchema,
       })
       .strict(),
@@ -129,6 +175,7 @@ export const ErrorResponseSchema = z
 export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 export type BrokerCallBody = z.infer<typeof BrokerCallBodySchema>;
 export type BrokerCallRequest = z.infer<typeof BrokerCallRequestSchema>;
+export type BrokerCallResponse = z.infer<typeof BrokerCallResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
 export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>;

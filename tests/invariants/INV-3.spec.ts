@@ -34,7 +34,7 @@ describe("INV-3: policy identity is resolved outside the guest", () => {
     await fixture.sql`
       INSERT INTO sessions (
         id, status, agent_image, approval_mode, scopes, roles, policy_bundle_id,
-        requested_by, hardware_isolated, expires_at
+        requested_by, hardware_isolated, driver, expires_at
       ) VALUES (
         '018f0000-0000-7000-8000-000000000002',
         'ready',
@@ -45,6 +45,7 @@ describe("INV-3: policy identity is resolved outside the guest", () => {
         '018f0000-0000-7000-8000-000000000001',
         'test operator',
         false,
+        'container',
         '2026-12-31T00:00:00Z'
       )
     `;

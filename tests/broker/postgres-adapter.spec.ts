@@ -1,10 +1,9 @@
 import { inspect } from "node:util";
-
+import postgres from "postgres";
+import { describe, expect, it, vi } from "vitest";
 import { PostgresAdapter } from "../../apps/broker/src/postgres-adapter.js";
 import { buildAuditPayload } from "../../packages/audit/src/outbox.js";
 import { SecretString } from "../../packages/secrets/src/credentials.js";
-import postgres from "postgres";
-import { describe, expect, it, vi } from "vitest";
 
 import { createPostgresFixture } from "../helpers/postgres.js";
 

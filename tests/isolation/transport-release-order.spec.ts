@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-
+import { destroyPreparedSandbox } from "../../apps/control-plane/src/boot-sandbox.js";
 import type {
   PreparedSandbox,
   SandboxHandle,
   TransportDescriptor,
   TransportHost,
 } from "../../packages/isolation/src/index.js";
-import { destroyPreparedSandbox } from "../../apps/control-plane/src/boot-sandbox.js";
 
 const descriptor: TransportDescriptor = {
   kind: "unix",

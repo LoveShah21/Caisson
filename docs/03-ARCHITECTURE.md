@@ -57,7 +57,7 @@ The single most important architectural consequence: **the broker is on the host
 Fastify. Owns session records, the websocket hub for approvals and `ask_user`, the policy bundle loader, and the snapshot scheduler. Stateless apart from Postgres, Redis, and ClickHouse. It handles credential references but never credential values.
 
 ### Broker (`apps/broker`)
-The choke point. One process per sandbox host. Holds a vsock listener, an adapter registry, a policy evaluator, a secret client, a redaction pipeline, an audit writer, and a durable completion buffer. A direct ClickHouse write is the fast path. A persistent Redis stream or on-disk WAL retains post-execution records when ClickHouse is unavailable. Deliberately small and deliberately boring; this is the code a security reviewer will read line by line.
+The choke point. One process per sandbox host. Holds a vsock listener, an adapter registry, a policy evaluator, a secret client, a redaction pipeline, an audit writer, and a durable completion buffer. The Postgres `audit_outbox` is the durable completion buffer. Before execution the broker synchronously delivers its outbox record to ClickHouse. Terminal records commit to the outbox and the startup and periodic drainer delivers them in per-session sequence order. Deliberately small and deliberately boring; this is the code a security reviewer will read line by line.
 
 ### Isolation (`packages/isolation`)
 `IsolationDriver` plus `FirecrackerDriver` and `ContainerDriver`. Firecracker is driven directly over its REST API on a unix socket; no third-party SDK is needed for the small surface used here. Its stdin is detached from the controlling terminal and stdout and stderr are written to a per-sandbox host log file. It reports a guest ready only after the M-1 infrastructure probe completes a host-initiated vsock command round trip. See ADR-4.
@@ -78,7 +78,7 @@ Next.js. Subscribes to the websocket hub, renders pending requests in human-read
 
 1. Control plane calls `prepare()`. The driver allocates a host-only descriptor and asks the broker-owned `transportHost` for a runtime attachment. The container attachment is an owner-only Unix listener created by the broker. The Firecracker attachment is a random private UDS path reserved by the broker and bound by the trusted Firecracker process. The control plane persists the descriptor, never the attachment path, then calls `start()`. A persistence failure destroys the prepared sandbox before `transportHost.release()` removes the attachment. Snapshot restore follows the same prepare, persist, start order with a new attachment.
 2. Agent calls the `broker` tool.
-3. Runtime writes a framed request to vsock or the container's mounted Unix socket.
+3. Runtime writes a framed request to vsock or the container's mounted Unix socket. Frames use the bounded protocol in `05-API-CONTRACTS.md`: UInt32BE payload length followed by UTF-8 JSON, maximum 16 MiB. The broker validates configured adapter caps against that maximum during startup.
 4. Broker resolves the session from the connection binding. Not from the payload.
 5. Broker checks token validity and loads the scope set from Postgres.
 6. Broker resolves the adapter and method, validates params against the schema.
@@ -89,7 +89,7 @@ Next.js. Subscribes to the websocket hub, renders pending requests in human-read
 11. Broker fetches the credential, applying any role-downgrade obligation.
 12. Adapter executes with pooling and timeout.
 13. Response passes through redaction if obliged.
-14. Broker writes `action.completed` or `action.failed` directly to ClickHouse. If the direct write fails, it appends the record to the durable completion buffer for retry.
+14. Broker commits `action.completed` or `action.failed` to the durable completion buffer. The startup and periodic drainer delivers it to ClickHouse in sequence order.
 15. The result is framed back over vsock only after the completion record is accepted by ClickHouse or the durable buffer.
 16. A reconciliation job flags every `action.started` without a matching terminal record past the configured threshold as orphaned and retries buffered records until the pair is complete.
 

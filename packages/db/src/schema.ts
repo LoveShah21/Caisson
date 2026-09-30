@@ -145,6 +145,31 @@ export const settings = pgTable("settings", {
   updatedBy: text("updated_by"),
 });
 
+export const services = pgTable("services", {
+  id: uuid().primaryKey(),
+  name: text().notNull().unique(),
+  adapter: text().notNull(),
+  config: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  enabled: boolean().notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const credentialRefs = pgTable(
+  "credential_refs",
+  {
+    id: uuid().primaryKey(),
+    serviceId: uuid("service_id")
+      .notNull()
+      .references(() => services.id),
+    role: text().notNull(),
+    backend: text().notNull(),
+    backendPath: text("backend_path").notNull(),
+    rotatedAt: timestamp("rotated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex("credential_refs_service_role_uidx").on(table.serviceId, table.role)],
+);
+
 export const snapshots = pgTable(
   "snapshots",
   {
@@ -185,4 +210,20 @@ export const auditOutbox = pgTable(
       .on(table.sessionId, table.seq)
       .where(sql`${table.deliveryState} = 'pending'`),
   ],
+);
+
+export const systemAuditEvents = pgTable(
+  "system_audit_events",
+  {
+    id: uuid().primaryKey(),
+    timestamp: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    eventType: text("event_type").notNull(),
+    inputHash: text("input_hash").notNull(),
+    outcome: text().notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    traceId: text("trace_id").notNull(),
+    spanId: text("span_id").notNull(),
+    callerConnection: text("caller_connection"),
+  },
+  (table) => [index("system_audit_events_timestamp_idx").on(table.timestamp.desc())],
 );

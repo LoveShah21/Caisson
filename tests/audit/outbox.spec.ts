@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   AuditOutboxWriter,
-  ClickHouseAuditSink,
   type AuditSink,
+  ClickHouseAuditSink,
   type StoredAuditEvent,
 } from "../../packages/audit/src/index.js";
-import { createClickHouseFixture, type ClickHouseFixture } from "../helpers/clickhouse.js";
+import { type ClickHouseFixture, createClickHouseFixture } from "../helpers/clickhouse.js";
 import { createPostgresFixture, type PostgresFixture } from "../helpers/postgres.js";
 
 const bundleId = "018f0000-0000-7000-8000-000000000101";
@@ -69,6 +69,15 @@ describe("Postgres audit outbox", () => {
     await Promise.all([writer.deliverSession(sessionId), writer.deliverSession(sessionId)]);
 
     expect(await clickhouse.query(countQuery(sessionId, 2))).toBe("1\n");
+  });
+
+  it("drains pending terminal records during startup or periodic recovery", async () => {
+    const writer = new AuditOutboxWriter(postgres.sql, sink);
+    await writer.persistDurably(lifecycleInput("018f0000-0000-7000-8000-000000000108"));
+
+    await writer.drainPending();
+
+    expect(await clickhouse.query(countQuery(sessionId, 3))).toBe("1\n");
   });
 
   it("rejects raw parameter, credential, secret, and result payload fields in Postgres", async () => {

@@ -1,3 +1,5 @@
+import type { AuditOutboxWriter, SystemAuditWriter } from "@caisson/audit";
+import type { PolicyBundleLoader } from "@caisson/policy";
 import {
   CaissonError,
   CreateSessionRequestSchema,
@@ -6,6 +8,12 @@ import {
   GetSessionResponseSchema,
   SessionIdSchema,
 } from "@caisson/protocol";
+import {
+  getActiveTraceIdentifiers,
+  initializeTelemetry,
+  runInSpan,
+  SPAN_NAMES,
+} from "@caisson/telemetry";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -19,13 +27,23 @@ export interface ControlPlaneServerOptions {
   readonly lifecycle: SessionLifecycleService;
   readonly reconcileIntervalMs?: number;
   readonly reconciliationScheduler?: ReconciliationScheduler;
+  readonly audit?: AuditOutboxWriter;
+  readonly policyBundles?: PolicyBundleLoader;
+  readonly systemAudit?: SystemAuditWriter;
 }
 
 export function createControlPlaneServer(options: ControlPlaneServerOptions): FastifyInstance {
+  const otlpEndpoint = process.env["CAISSON_OTLP_ENDPOINT"];
+  initializeTelemetry(otlpEndpoint === undefined ? {} : { otlpEndpoint });
   const app = Fastify();
   const reconcileIntervalMs = options.reconcileIntervalMs ?? 5_000;
   const reconciler = new PeriodicReconciler(
-    options.lifecycle,
+    {
+      reconcile: async () => {
+        await options.audit?.drainPending();
+        await options.lifecycle.reconcile();
+      },
+    },
     reconcileIntervalMs,
     options.reconciliationScheduler,
   );
@@ -82,6 +100,50 @@ export function createControlPlaneServer(options: ControlPlaneServerOptions): Fa
     }
     const destroyed = await options.lifecycle.destroy(sessionId.data, body.data.reason);
     return reply.status(202).send(DeleteSessionResponseSchema.parse(destroyed));
+  });
+
+  app.post("/v1/policy/simulate", async (request, reply) => {
+    const policyBundles = options.policyBundles;
+    const systemAudit = options.systemAudit;
+    if (policyBundles === undefined || systemAudit === undefined) {
+      throw new CaissonError("POLICY_UNAVAILABLE", "policy evaluation is unavailable");
+    }
+    const input = z.record(z.string(), z.json()).safeParse(request.body);
+    if (!input.success) {
+      throw new CaissonError("INVALID_REQUEST", "policy simulation input is invalid");
+    }
+    return runInSpan(SPAN_NAMES.policyEval, async () => {
+      const startedAt = performance.now();
+      try {
+        const bundle = await policyBundles.loadActive();
+        const result = bundle.evaluator.evaluate(input.data);
+        const trace = getActiveTraceIdentifiers();
+        if (trace === undefined) throw new CaissonError("INTERNAL", "policy trace is unavailable");
+        await systemAudit.write({
+          eventType: "policy.simulate",
+          policyInput: input.data,
+          outcome: result.decision,
+          durationMs: Math.round(performance.now() - startedAt),
+          ...trace,
+          callerConnection: request.ip,
+        });
+        return reply.status(200).send(result);
+      } catch (error: unknown) {
+        if (error instanceof CaissonError && error.code === "AUDIT_UNAVAILABLE") throw error;
+        const trace = getActiveTraceIdentifiers();
+        if (trace !== undefined) {
+          await systemAudit.write({
+            eventType: "policy.simulate",
+            policyInput: input.data,
+            outcome: "error",
+            durationMs: Math.round(performance.now() - startedAt),
+            ...trace,
+            callerConnection: request.ip,
+          });
+        }
+        throw error;
+      }
+    });
   });
 
   app.addHook("onReady", async () => {

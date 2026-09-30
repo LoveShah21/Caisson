@@ -1,6 +1,6 @@
-import { VaultSecretBackend } from "../../packages/secrets/src/index.js";
 import { GenericContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { VaultSecretBackend } from "../../packages/secrets/src/index.js";
 
 const ROOT_TOKEN = "vault-test-token-not-a-production-secret";
 let backend: VaultSecretBackend;

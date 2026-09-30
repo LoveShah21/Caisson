@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
+import { createControlPlaneServer } from "../../apps/control-plane/src/server.js";
+import { SessionLifecycleService } from "../../apps/control-plane/src/session-lifecycle.js";
 import {
   AuditOutboxWriter,
   type AuditSink,
   type StoredAuditEvent,
 } from "../../packages/audit/src/index.js";
-import { SessionLifecycleService } from "../../apps/control-plane/src/session-lifecycle.js";
-import { createControlPlaneServer } from "../../apps/control-plane/src/server.js";
 import type {
   IsolationDriver,
   SandboxHandle,
@@ -270,7 +269,9 @@ describe("single-session lifecycle", () => {
 
     lifecycle.blockNextRun();
     scheduler.fireAll();
+    await Promise.resolve();
     scheduler.fireAll();
+    await Promise.resolve();
     expect(lifecycle.calls).toBe(2);
 
     const closing = app.close();

@@ -1,5 +1,5 @@
-import net from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 

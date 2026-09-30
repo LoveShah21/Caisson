@@ -1,5 +1,5 @@
-import { HttpAdapter, type PinnedHttpTransport } from "../../apps/broker/src/http-adapter.js";
 import { describe, expect, it } from "vitest";
+import { HttpAdapter, type PinnedHttpTransport } from "../../apps/broker/src/http-adapter.js";
 
 const context = { timeoutMs: 1_000 };
 const config = {
@@ -8,6 +8,7 @@ const config = {
   timeoutMs: 500,
   requestSizeBytes: 32,
   responseSizeBytes: 32,
+  responseHeaderBytes: 256,
 };
 
 describe("HttpAdapter", () => {
@@ -183,6 +184,27 @@ describe("HttpAdapter", () => {
     });
     await expect(
       oversized.methods.request.execute(
+        undefined,
+        { url: "https://api.example.test/v1/a", method: "GET" },
+        context,
+      ),
+    ).rejects.toMatchObject({ code: "SERVICE_ERROR" });
+  });
+
+  it("rejects response headers beyond the configured byte limit", async () => {
+    const adapter = new HttpAdapter(
+      { ...config, responseHeaderBytes: 8 },
+      {
+        resolve: publicResolver,
+        transport: successTransport({
+          status: 200,
+          headers: { "x-long": "too-long" },
+          body: Buffer.alloc(0),
+        }),
+      },
+    );
+    await expect(
+      adapter.methods.request.execute(
         undefined,
         { url: "https://api.example.test/v1/a", method: "GET" },
         context,
