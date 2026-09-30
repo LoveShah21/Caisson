@@ -15,6 +15,7 @@ import { initializeTelemetry, shutdownTelemetry } from "../packages/telemetry/di
 
 const execFileAsync = promisify(execFile);
 const samples = Number.parseInt(process.env.CAISSON_BENCH_SAMPLES ?? "200", 10);
+const warmupSamples = 20;
 const databaseUrl = required("CAISSON_DATABASE_URL");
 const clickhouseUrl = required("CAISSON_CLICKHOUSE_URL");
 const clickhouseUsername = required("CAISSON_CLICKHOUSE_USERNAME");
@@ -41,7 +42,6 @@ const phaseDurations = new Map();
 if (!Number.isInteger(samples) || samples < 200) {
   throw new Error("CAISSON_BENCH_SAMPLES must be an integer of at least 200");
 }
-
 await bootstrap("bootstrap-policy.mjs");
 await bootstrap("bootstrap-services.mjs");
 
@@ -150,6 +150,14 @@ await sink.ensureSchema();
 initializeTelemetry();
 const durations = [];
 try {
+  for (let index = 0; index < warmupSamples; index += 1) {
+    const response = await pipeline.handle(peer, {
+      ...request,
+      id: `${request.id}-warmup-${index}`,
+    });
+    if (!response.ok) throw new Error(`broker benchmark warmup request ${index} was denied`);
+  }
+  phaseDurations.clear();
   for (let index = 0; index < samples; index += 1) {
     const startedAt = performance.now();
     const response = await pipeline.handle(peer, { ...request, id: `${request.id}-${index}` });
@@ -165,6 +173,7 @@ try {
 const result = {
   benchmark: "broker-overhead",
   samples,
+  warmupSamples,
   timingModel: "identity_policy_audit_credential_baseline_adapter",
   execution:
     "resolve peer identity, load and evaluate policy, synchronously persist action.started, resolve credentials, invoke a no-op adapter baseline, enqueue action.completed",

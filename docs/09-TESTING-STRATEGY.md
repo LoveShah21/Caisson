@@ -83,6 +83,13 @@ In `benchmarks/`, each benchmark is a runnable script. Every run records the har
 
 - `bench-boot.ts`: cold and warm session start, p50 and p99, both drivers.
 - `bench-broker.ts`: broker overhead excluding downstream, by service, p50 and p99.
+
+`bench-broker.mjs` runs twenty unmeasured warmup calls before its minimum two
+hundred recorded samples. This measures steady-state broker overhead after
+database pools, the policy bundle, the telemetry provider, and ClickHouse's
+insert buffer have initialized. The result records both counts and still
+includes identity resolution, policy, fail-closed pre-execution audit,
+credential resolution, the no-op adapter baseline, and durable terminal enqueue.
 - `bench-policy.ts`: wasm evaluation latency across bundle sizes.
 - `bench-concurrency.ts`: fifty concurrent sessions, boot contention, error rate.
 

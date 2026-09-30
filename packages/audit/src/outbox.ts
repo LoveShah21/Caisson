@@ -162,10 +162,13 @@ export class AuditOutboxWriter {
     let activeEventIds: readonly string[] = [];
     try {
       await this.#sql.begin(async (transaction) => {
-        await transaction`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
         const rows = await transaction<OutboxRow[]>`
+          WITH session_lock AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))
+          )
           SELECT id, session_id, seq, payload, delivery_attempts
           FROM audit_outbox
+          CROSS JOIN session_lock
           WHERE session_id = ${sessionId} AND delivery_state = 'pending'
           ORDER BY seq
           FOR UPDATE
@@ -200,12 +203,13 @@ export class AuditOutboxWriter {
             }
           }
         }
-        for (const row of rows) {
+        if (rows.length > 0) {
+          activeEventIds = rows.map((row) => row.id);
           await transaction`
             UPDATE audit_outbox
             SET delivery_state = 'delivered', delivered_at = now(),
                 delivery_attempts = delivery_attempts + 1, last_error = NULL
-            WHERE id = ${row.id}
+            WHERE id = ANY(${activeEventIds}::uuid[])
           `;
         }
       });
@@ -227,32 +231,35 @@ async function allocateOutboxEvent(
   input: AuditEventInput,
   payload: AuditPayload,
 ): Promise<StoredAuditEvent> {
-  const [session] = await transaction<{ next_audit_seq: number }[]>`
-    UPDATE sessions
-    SET
-      next_audit_seq = next_audit_seq + 1,
-      action_allow_count = action_allow_count + ${input.decision === "allow" ? 1 : 0},
-      action_deny_count = action_deny_count + ${input.decision === "deny" ? 1 : 0},
-      action_require_approval_count = action_require_approval_count + ${
-        input.decision === "require_approval" ? 1 : 0
-      }
-    WHERE id = ${input.sessionId}
-    RETURNING next_audit_seq
+  const eventId = uuidV7();
+  const [inserted] = await transaction<{ seq: number }[]>`
+    WITH allocated AS (
+      UPDATE sessions
+      SET
+        next_audit_seq = next_audit_seq + 1,
+        action_allow_count = action_allow_count + ${input.decision === "allow" ? 1 : 0},
+        action_deny_count = action_deny_count + ${input.decision === "deny" ? 1 : 0},
+        action_require_approval_count = action_require_approval_count + ${
+          input.decision === "require_approval" ? 1 : 0
+        }
+      WHERE id = ${input.sessionId}
+      RETURNING next_audit_seq
+    )
+    INSERT INTO audit_outbox (id, session_id, seq, payload)
+    SELECT ${eventId}, ${input.sessionId}, next_audit_seq, ${transaction.json(payload)}::jsonb
+    FROM allocated
+    RETURNING seq
   `;
-  if (session === undefined) {
+  if (inserted === undefined) {
     throw new CaissonError("SESSION_NOT_FOUND", "cannot audit an unknown session");
   }
 
   const event: StoredAuditEvent = {
-    id: uuidV7(),
+    id: eventId,
     sessionId: input.sessionId,
-    seq: session.next_audit_seq,
+    seq: inserted.seq,
     payload,
   };
-  await transaction`
-    INSERT INTO audit_outbox (id, session_id, seq, payload)
-    VALUES (${event.id}, ${event.sessionId}, ${event.seq}, ${transaction.json(event.payload)}::jsonb)
-  `;
   return event;
 }
 
