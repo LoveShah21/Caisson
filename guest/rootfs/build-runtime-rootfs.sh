@@ -12,9 +12,11 @@ mkdir -p "$(dirname "$output")" "$work"
 truncate -s 32M "$output"; mkfs.ext4 -q -F "$output"
 debugfs -w -R "mkdir /dev" "$output" >/dev/null
 debugfs -w -R "mkdir /proc" "$output" >/dev/null
-debugfs -w -R "mknod /dev/null c 1 3" "$output" >/dev/null
-debugfs -w -R "mknod /dev/random c 1 8" "$output" >/dev/null
-debugfs -w -R "mknod /dev/urandom c 1 9" "$output" >/dev/null
+printf '%s\n' \
+  'cd /dev' \
+  'mknod null c 1 3' \
+  'mknod random c 1 8' \
+  'mknod urandom c 1 9' | debugfs -w "$output" >/dev/null
 debugfs -w -R "write $work/init /init" "$output" >/dev/null
 debugfs -w -R "sif /init mode 0100755" "$output" >/dev/null
 debugfs -w -R "sif /dev/null mode 020666" "$output" >/dev/null
