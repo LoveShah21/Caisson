@@ -405,3 +405,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** Policy simulation is development and administrative tooling, not a guest action. M-2 has no trusted caller identity and therefore cannot truthfully attach it to a session audit sequence. A separate direct Postgres record captures an input hash, outcome, duration, trace and span identifiers, and nullable connection metadata. The input is checked for secret-shaped values before anything derived from it is stored. The session outbox is intentionally not generalized because its order and recovery guarantees are defined per session.
 
 **Consequences:** `POST /v1/policy/simulate` fails closed when its system audit write fails. It records no placeholder identity. M-4 authenticated-caller work must revisit whether the endpoint requires authentication and whether these audit records should carry verified identity.
+
+---
+
+## ADR-36: M-2 uses a minimal immutable guest runtime and confirmed entropy refresh
+**Status:** accepted
+
+**Alternatives:** Wait for M-3's seven-tool agent runtime before proving live vsock and restore readiness; reuse the unrestricted M-1 development probe; rely on VMGenID or a best-effort kernel reseed.
+
+**Reasoning:** M-2 requires a real Firecracker broker path, an eligible base rootfs, and FR-17a before warm restores can serve sessions. The M-1 probe is deliberately unrestricted and structurally ineligible. Pulling the full agent runtime forward would expand M-2 with seven tools and their M-3 security work. A narrow static `/init` can instead implement only bounded framed `broker.call` messages and a dedicated entropy-control message. After restore, the host sends 256 bits of fresh entropy over the trusted vsock channel; the guest mixes it with `RNDADDENTROPY` or an equivalent kernel operation and acknowledges success. The host cannot mark the guest ready without that acknowledgement. The real proof is two restored guests from one snapshot producing distinct random output.
+
+**Consequences:** The eligible rootfs contains only the static runtime and minimal init/device setup. An inventory test enforces an explicit file allowlist and rejects credentials, tokens, fixtures, and build artifacts. The runtime accepts no token or credential material, and the snapshot harness inspects every message delivered to the guest for secret-shaped values before capture. The full seven-tool runtime remains M-3. FR-17a and this minimal runtime move to M-2; FR-16 and FR-17b remain M-3.

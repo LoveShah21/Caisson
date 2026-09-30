@@ -20,11 +20,13 @@ FR-8 to FR-12. `IsolationDriver`, both implementations, driver-level snapshot bu
 
 ## M-2. Broker and credential brokering (weeks 3 to 4)
 
-FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, base-snapshot scheduling and storage, vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
+FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, base-snapshot scheduling and storage, the minimal guest runtime for framed `broker.call` vsock and entropy-control messages, live Firecracker vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
 
 **Completion checklist:**
 
 - [ ] Wire every live broker request through `SessionIdentityResolver.resolve(peer)` before policy evaluation, so the broker loads the bound token row and enforces its expiry and revocation state. FR-3.
+- [ ] Build and inventory an eligible immutable guest runtime rootfs. It contains only minimal init/device setup and the static M-2 runtime, and excludes the M-1 probe, credentials, tokens, fixtures, and build artifacts.
+- [ ] Run the live Firecracker vsock broker path and prove FR-17a entropy distinctness on KVM-capable WSL2/Linux before a restored guest becomes ready.
 - [ ] Do not claim an S3 cache-hit warm-restore result until the eligible runtime rootfs exists and the cache-hit benchmark has run on KVM.
 - [ ] Run the Firecracker case of INV-7 in KVM-capable WSL2/Linux using an eligible non-M-1 runtime rootfs. Until then it remains an explicit skip.
 - [ ] Define a long-term third-party image supply-chain control, such as a private mirror or freshness check. Two unrelated public registries have stopped serving pinned images during M-2.
@@ -41,14 +43,13 @@ FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 
 ## M-3. Policy and agent runtime (week 5)
 
-FR-16, FR-17b, FR-37, FR-39 to FR-45, and the remaining non-approval policy work. This includes the separately designed per-session snapshot lifecycle, session-scoped encryption and retention/deletion rules, restore scope compatible with INV-7, and the required entropy-refresh mechanism for restored guests. SQL parsing and adversarial hardening in the broker, Rego test gating, the seven-tool runtime-facing policy surface, skills loader, and structured denials. Approval-mode policy behaviour remains in M-4.
+FR-16, FR-17b, FR-37, FR-39 to FR-45, and the remaining non-approval policy work. This includes the separately designed per-session snapshot lifecycle, session-scoped encryption and retention/deletion rules, restore scope compatible with INV-7. SQL parsing and adversarial hardening in the broker, Rego test gating, the seven-tool runtime-facing policy surface, skills loader, and structured denials. Approval-mode policy behaviour remains in M-4.
 
 **Gate:**
 - `opa test policies/` passes in CI.
 - A denial reaches the agent structured and the reference loop adapts rather than retrying identically.
 - `tests/adversarial/sql-evasion.spec.ts` contains at least five evasion attempts, all denied.
 - `POST /v1/policy/simulate` returns a decision with matched rule names.
-- A restored guest passes FR-17a's entropy-distinctness test on Firecracker with KVM. It cannot be marked ready before the entropy confirmation succeeds.
 
 ## M-4. Approvals and interception (weeks 6 to 7)
 
