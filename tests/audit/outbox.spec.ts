@@ -88,6 +88,19 @@ describe("Postgres audit outbox", () => {
     expect(await clickhouse.query(countQuery(sessionId, 4))).toBe("1\n");
   });
 
+  it("delivers pending events for one session as one ordered ClickHouse batch", async () => {
+    const batching = new BatchTrackingSink(sink);
+    const writer = new AuditOutboxWriter(postgres.sql, batching);
+    await writer.persistDurably(lifecycleInput("018f0000-0000-7000-8000-000000000110"));
+    await writer.persistDurably(lifecycleInput("018f0000-0000-7000-8000-000000000111"));
+
+    await writer.deliverSession(sessionId);
+
+    expect(batching.batches).toEqual([[5, 6]]);
+    expect(await clickhouse.query(countQuery(sessionId, 5))).toBe("1\n");
+    expect(await clickhouse.query(countQuery(sessionId, 6))).toBe("1\n");
+  });
+
   it("rejects raw parameter, credential, secret, and result payload fields in Postgres", async () => {
     await expect(
       postgres.sql`
@@ -185,6 +198,31 @@ class FirstDeliverySink implements AuditSink {
 
   async insert(event: StoredAuditEvent): Promise<void> {
     await this.#sink.insert(event);
+  }
+}
+
+class BatchTrackingSink implements AuditSink {
+  readonly #sink: AuditSink;
+  readonly batches: number[][] = [];
+
+  constructor(sink: AuditSink) {
+    this.#sink = sink;
+  }
+
+  async hasEvent(sessionId: string, seq: number): Promise<boolean> {
+    return this.#sink.hasEvent(sessionId, seq);
+  }
+
+  async insert(event: StoredAuditEvent): Promise<void> {
+    await this.#sink.insert(event);
+  }
+
+  async insertBatch(events: readonly StoredAuditEvent[]): Promise<void> {
+    this.batches.push(events.map((event) => event.seq));
+    if (this.#sink.insertBatch === undefined) {
+      throw new Error("the ClickHouse test sink must support batch insertion");
+    }
+    await this.#sink.insertBatch(events);
   }
 }
 

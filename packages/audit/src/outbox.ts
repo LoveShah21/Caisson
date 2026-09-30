@@ -105,6 +105,7 @@ interface OutboxRow {
 export interface AuditSink {
   hasEvent(sessionId: string, seq: number): Promise<boolean>;
   insert(event: StoredAuditEvent): Promise<void>;
+  insertBatch?(events: readonly StoredAuditEvent[]): Promise<void>;
 }
 
 export class AuditOutboxWriter {
@@ -158,7 +159,7 @@ export class AuditOutboxWriter {
   }
 
   async deliverSession(sessionId: string): Promise<void> {
-    let activeEventId: string | undefined;
+    let activeEventIds: readonly string[] = [];
     try {
       await this.#sql.begin(async (transaction) => {
         await transaction`SELECT pg_advisory_xact_lock(hashtextextended(${sessionId}, 0))`;
@@ -170,8 +171,9 @@ export class AuditOutboxWriter {
           FOR UPDATE
         `;
 
+        const eventsToInsert: StoredAuditEvent[] = [];
         for (const row of rows) {
-          activeEventId = row.id;
+          activeEventIds = [row.id];
           const event: StoredAuditEvent = {
             id: row.id,
             sessionId: row.session_id,
@@ -185,22 +187,34 @@ export class AuditOutboxWriter {
           const alreadyDelivered =
             row.delivery_attempts > 0 && (await this.#sink.hasEvent(event.sessionId, event.seq));
           if (!alreadyDelivered) {
-            await this.#sink.insert(event);
+            eventsToInsert.push(event);
           }
+        }
+        if (eventsToInsert.length > 0) {
+          activeEventIds = eventsToInsert.map((event) => event.id);
+          if (this.#sink.insertBatch !== undefined) {
+            await this.#sink.insertBatch(eventsToInsert);
+          } else {
+            for (const event of eventsToInsert) {
+              await this.#sink.insert(event);
+            }
+          }
+        }
+        for (const row of rows) {
           await transaction`
             UPDATE audit_outbox
             SET delivery_state = 'delivered', delivered_at = now(),
                 delivery_attempts = delivery_attempts + 1, last_error = NULL
-            WHERE id = ${event.id}
+            WHERE id = ${row.id}
           `;
         }
       });
     } catch (error: unknown) {
-      if (activeEventId !== undefined) {
+      if (activeEventIds.length > 0) {
         await this.#sql`
           UPDATE audit_outbox
           SET delivery_attempts = delivery_attempts + 1, last_error = 'clickhouse delivery failed'
-          WHERE id = ${activeEventId}
+          WHERE id = ANY(${activeEventIds}::uuid[])
         `;
       }
       throw new CaissonError("AUDIT_UNAVAILABLE", "audit delivery failed", undefined, error);
@@ -274,43 +288,16 @@ export class ClickHouseAuditSink implements AuditSink {
   }
 
   async insert(event: StoredAuditEvent): Promise<void> {
-    assertSessionAndSeq(event.sessionId, event.seq);
-    const row = {
-      session_id: event.sessionId,
-      action_id: event.payload.actionId,
-      timestamp: event.payload.timestamp,
-      seq: event.seq,
-      event_type: event.payload.eventType,
-      action_type: event.payload.actionType,
-      service: event.payload.service,
-      method: event.payload.method,
-      decision: event.payload.decision,
-      policy_bundle: event.payload.policyBundle,
-      policy_reason: event.payload.policyReason,
-      obligations: event.payload.obligations,
-      scope_used: event.payload.scopeUsed,
-      role_used: event.payload.roleUsed,
-      params_hash: event.payload.paramsHash,
-      params_preview: event.payload.paramsPreview,
-      result_bytes: event.payload.resultBytes,
-      result_hash: event.payload.resultHash,
-      redaction_count: event.payload.redactionCount,
-      duration_ms: event.payload.durationMs,
-      approval_id: event.payload.approvalId,
-      approval_wait_ms: event.payload.approvalWaitMs,
-      skill_loaded: event.payload.skillLoaded,
-      agent_intent: event.payload.agentIntent,
-      driver: event.payload.driver,
-      hardware_isolated: event.payload.hardwareIsolated ? 1 : 0,
-      trace_id: event.payload.traceId,
-      span_id: event.payload.spanId,
-      error_code: event.payload.errorCode,
-      error_message: event.payload.errorMessage,
-      network_destination: event.payload.networkDestination,
-      network_protocol: event.payload.networkProtocol,
-    };
+    await this.insertBatch([event]);
+  }
+
+  async insertBatch(events: readonly StoredAuditEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    const rows = events.map((event) => auditRow(event));
     await this.#query(
-      `INSERT INTO actions ${DURABLE_INSERT_SETTINGS} FORMAT JSONEachRow\n${JSON.stringify(row)}`,
+      `INSERT INTO actions ${DURABLE_INSERT_SETTINGS} FORMAT JSONEachRow\n${rows
+        .map((row) => JSON.stringify(row))
+        .join("\n")}`,
     );
   }
 
@@ -326,6 +313,44 @@ export class ClickHouseAuditSink implements AuditSink {
     }
     return body;
   }
+}
+
+function auditRow(event: StoredAuditEvent) {
+  assertSessionAndSeq(event.sessionId, event.seq);
+  return {
+    session_id: event.sessionId,
+    action_id: event.payload.actionId,
+    timestamp: event.payload.timestamp,
+    seq: event.seq,
+    event_type: event.payload.eventType,
+    action_type: event.payload.actionType,
+    service: event.payload.service,
+    method: event.payload.method,
+    decision: event.payload.decision,
+    policy_bundle: event.payload.policyBundle,
+    policy_reason: event.payload.policyReason,
+    obligations: event.payload.obligations,
+    scope_used: event.payload.scopeUsed,
+    role_used: event.payload.roleUsed,
+    params_hash: event.payload.paramsHash,
+    params_preview: event.payload.paramsPreview,
+    result_bytes: event.payload.resultBytes,
+    result_hash: event.payload.resultHash,
+    redaction_count: event.payload.redactionCount,
+    duration_ms: event.payload.durationMs,
+    approval_id: event.payload.approvalId,
+    approval_wait_ms: event.payload.approvalWaitMs,
+    skill_loaded: event.payload.skillLoaded,
+    agent_intent: event.payload.agentIntent,
+    driver: event.payload.driver,
+    hardware_isolated: event.payload.hardwareIsolated ? 1 : 0,
+    trace_id: event.payload.traceId,
+    span_id: event.payload.spanId,
+    error_code: event.payload.errorCode,
+    error_message: event.payload.errorMessage,
+    network_destination: event.payload.networkDestination,
+    network_protocol: event.payload.networkProtocol,
+  };
 }
 
 export function buildAuditPayload(input: AuditEventInput): AuditPayload {
