@@ -151,7 +151,10 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})
 }
 
-var diagnosticSecretShape = regexp.MustCompile(`AKIA[A-Z0-9]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|sk-[A-Za-z0-9]{20,}`)
+// INV-1 uses a separately generated AWS-access-key-shaped canary. Scanning
+// that bounded exact shape avoids applying a permissive JWT expression to the
+// static Go binary, where ordinary build metadata creates false candidates.
+var diagnosticCanaryCandidate = regexp.MustCompile(`AKIA[A-Z0-9]{16}`)
 
 // diagnosticCanaryLocations inspects diagnostic-visible process and filesystem
 // state for the known test canary. The host supplies only its SHA-256 digest in
@@ -164,7 +167,7 @@ func diagnosticCanaryLocations() ([]string, error) {
 	}
 	matches := make([]string, 0)
 	inspect := func(location string, value []byte) {
-		for _, candidate := range diagnosticSecretShape.FindAll(value, -1) {
+		for _, candidate := range diagnosticCanaryCandidate.FindAll(value, -1) {
 			digest := sha256.Sum256(candidate)
 			if hex.EncodeToString(digest[:]) == wanted {
 				matches = append(matches, location)
