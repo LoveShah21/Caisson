@@ -438,3 +438,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** INV-7 and the entropy-distinctness test need observable marker and random values, but those commands are not a production capability and do not belong in the minimal guest surface. The diagnostic rootfs is built from the same runtime source with a compile-time `diagnostic` tag. It adds only a host-initiated vsock diagnostic port after the initial entropy acknowledgement and broker round trip. The production artifact has no diagnostic listener or handlers. A fresh host entropy message is required both for cold boot and every restore; the acknowledgement gates readiness, while distinct kernel-random output across two restores proves the property.
 
 **Consequences:** `caisson-runtime-diagnostic-rootfs.ext4` and `m1-dev-probe-rootfs.ext4` are permanently rejected for production and base-snapshot promotion. The eligible `caisson-runtime-rootfs.ext4` contains only `/init`, `/dev`, and `/proc` plus unavoidable ext4 metadata, checked by the rootfs build. Its explicit `/dev` allowlist is `null`, `random`, and `urandom`; these static nodes let the read-only rootfs mix host-provided entropy without mounting `devtmpfs`. KVM-only tests use the diagnostic artifact but exercise the same entropy, framing, and vsock code as the eligible runtime. The host records every message delivered to the guest before snapshot capture and rejects secret-shaped content in the verification harness.
+
+---
+
+## ADR-39: M-2 runtime benchmarks are a distinct measurement series
+**Status:** accepted
+
+**Alternatives:** Compare M-2 runtime timings directly with M-1 probe or pre-runtime prepare/start timings; omit the timing-model labels.
+
+**Reasoning:** The M-2 measurements use the immutable runtime rootfs, entropy acknowledgement, framed broker-call round trip, and verified S3 cache-hit restore. Those are different workloads and lifecycle boundaries from the M-1 probe and the earlier prepare/start measurements. Comparing them directly would imply a performance conclusion the measurements do not support.
+
+**Consequences:** `bench-boot.mjs` records an explicit `timingModel` and writes the non-comparability note alongside the WSL2 resource-allocation note. The 2026-09-30 KVM measurement records 200 samples: cold p50 1684 ms and p99 1949 ms; S3 cache-hit warm restore p50 177 ms and p99 226 ms. These measurements verify the M-2 runtime path but do not accept or tag M-2; the remaining gate requirements stay listed in the roadmap.

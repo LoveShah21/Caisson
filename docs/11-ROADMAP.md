@@ -24,14 +24,17 @@ FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 
 **Completion checklist:**
 
-- [ ] Wire every live broker request through `SessionIdentityResolver.resolve(peer)` before policy evaluation, so the broker loads the bound token row and enforces its expiry and revocation state. FR-3.
-- [ ] Build and inventory an eligible immutable guest runtime rootfs. It contains only minimal init/device setup and the static M-2 runtime, and excludes the M-1 probe, credentials, tokens, fixtures, and build artifacts.
-- [ ] Run the live Firecracker vsock broker path and prove FR-17a entropy distinctness on KVM-capable WSL2/Linux before a restored guest becomes ready.
-- [ ] Do not claim an S3 cache-hit warm-restore result until the eligible runtime rootfs exists and the cache-hit benchmark has run on KVM.
-- [ ] Run the Firecracker case of INV-7 in KVM-capable WSL2/Linux using an eligible non-M-1 runtime rootfs. Until then it remains an explicit skip.
+- [x] Wire every live broker request through `SessionIdentityResolver.resolve(peer)` before policy evaluation, so the broker loads the bound token row and enforces its expiry and revocation state. FR-3.
+- [x] Build and inventory an eligible immutable guest runtime rootfs. It contains only minimal init/device setup and the static M-2 runtime, and excludes the M-1 probe, credentials, tokens, fixtures, and build artifacts.
+- [x] Run the live Firecracker vsock broker path and prove FR-17a entropy distinctness on KVM-capable WSL2/Linux before a restored guest becomes ready.
+- [x] Record an S3 cache-hit warm-restore measurement only after the eligible runtime rootfs exists and the cache-hit benchmark has run on KVM. The M-2 runtime measurement is p50 177 ms and p99 226 ms over 200 samples; its timing model is intentionally non-comparable to earlier measurements.
+- [x] Run the Firecracker case of INV-7 in KVM-capable WSL2/Linux using an eligible non-M-1 runtime rootfs.
+
+**Follow-up work, not a claim of M-2 gate completion:**
+
 - [ ] Define a long-term third-party image supply-chain control, such as a private mirror or freshness check. Two unrelated public registries have stopped serving pinned images during M-2.
 - [ ] Evaluate a PostgreSQL parser for deferred EXPLAIN support against the SELECT bypass suite and maintenance/coverage criteria. M-2 denies EXPLAIN.
-- [ ] Add an end-to-end secret-canary test for the live broker path. It must cover guest-visible output, audit records, telemetry spans, logs, and durable caches.
+- [ ] Extend the broker secret-canary test to inspect guest-visible output, audit records, telemetry spans, logs, and durable caches from a live guest-to-broker path.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
@@ -39,7 +42,9 @@ FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 - Forged identity fields in guest requests change nothing.
 - `bench-broker.ts` records overhead against NFR-2.
 
-**M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The invariant test must run on Firecracker in a KVM-capable WSL2/Linux environment as well; an unavailable KVM environment must report an explicit skipped Firecracker case rather than a passing result.
+**Current status:** Stages A through E are implemented and their completed checks above have been run. M-2 is not accepted or tagged: the full gate still requires INV-1 and INV-2, the broker-overhead benchmark, and final CI verification. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
+
+**M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The Firecracker case subsequently passed during M-2 on a KVM-capable WSL2 environment using the eligible diagnostic runtime rootfs. An unavailable KVM environment must still report an explicit skipped Firecracker case rather than a passing result.
 
 ## M-3. Policy and agent runtime (week 5)
 
