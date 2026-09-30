@@ -234,7 +234,9 @@ class FailingSink implements AuditSink {
   async hasEvent(): Promise<boolean> {
     throw new Error("audit unavailable");
   }
-  async insert(_event: StoredAuditEvent): Promise<void> {}
+  async insert(_event: StoredAuditEvent): Promise<void> {
+    throw new Error("audit unavailable");
+  }
 }
 
 function pipeName(): string {
