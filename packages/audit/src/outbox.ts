@@ -6,6 +6,11 @@ import type { Sql, TransactionSql } from "postgres";
 
 const PREVIEW_MAX_BYTES = 512;
 const EMPTY_HASH = "0".repeat(64);
+// ClickHouse acknowledges this only after its async insert buffer has flushed.
+// The short timeout batches concurrent host writes without changing the
+// fail-closed pre-execution acknowledgement boundary.
+const DURABLE_INSERT_SETTINGS =
+  "SETTINGS async_insert = 1, wait_for_async_insert = 1, async_insert_busy_timeout_ms = 1";
 
 export interface AuditEventInput {
   readonly sessionId: string;
@@ -304,7 +309,9 @@ export class ClickHouseAuditSink implements AuditSink {
       network_destination: event.payload.networkDestination,
       network_protocol: event.payload.networkProtocol,
     };
-    await this.#query(`INSERT INTO actions FORMAT JSONEachRow\n${JSON.stringify(row)}`);
+    await this.#query(
+      `INSERT INTO actions ${DURABLE_INSERT_SETTINGS} FORMAT JSONEachRow\n${JSON.stringify(row)}`,
+    );
   }
 
   async #query(query: string): Promise<string> {

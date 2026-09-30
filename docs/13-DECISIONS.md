@@ -482,3 +482,14 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** INV-1 requires inspection both before and after a brokered action. The diagnostic rootfs already exists solely for KVM verification, but its normal listener starts after the one-shot call, which cannot prove the pre-call state. A diagnostic-only boot argument pauses that call after the entropy acknowledgement until the trusted host diagnostic client sends one bounded `continue_broker` command. The eligible runtime cannot enable this path because it has no diagnostic build.
 
 **Consequences:** The INV-1 test uses `scan_canary` before and after a real Postgres broker call. The host supplies only a SHA-256 digest of the distinct AWS-access-key-shaped test canary in boot configuration, so the scanner can compare candidate values without receiving the canary itself. It returns locations only, never values, and inspects environment variables, every process command line, and the fixed minimal-rootfs footprint plus its diagnostic tmpfs mount. This is test scaffolding, not an agent capability or a production boot option.
+
+---
+
+## ADR-43: Audit inserts use ClickHouse acknowledged async batching
+**Status:** accepted
+
+**Alternatives:** One synchronous HTTP insert per audit record; enqueue without waiting for ClickHouse; change the audit store or relax NFR-2/NFR-4.
+
+**Reasoning:** A new action must not execute before `action.started` is accepted by ClickHouse, but serial one-row inserts make the audit store dominate broker overhead on the local single-node deployment. ClickHouse's `async_insert=1` with `wait_for_async_insert=1` batches host-side inserts and responds only after the buffered insert has flushed. Its one-millisecond busy timeout bounds batching delay while retaining the same acknowledgement requirement as a normal insert.
+
+**Consequences:** The audit writer uses these settings only for action inserts. A successful pre-execution response remains the fail-closed boundary. A failed or ambiguous request still leaves the Postgres outbox row pending, increments its attempt count, and retries under the existing per-session lock with `(session_id, seq)` lookup. The M-2 benchmark must measure the configured path; this ADR does not claim that NFR-2 or NFR-4 is met until a real result is recorded.
