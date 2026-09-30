@@ -12,6 +12,7 @@
     "bootstrap:policy": "node scripts/bootstrap-policy.mjs",
     "bootstrap:services": "node scripts/bootstrap-services.mjs",
     "build:minio": "node scripts/build-minio-image.mjs",
+    "bench:broker": "node benchmarks/bench-broker.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:runtime-versions": "node scripts/check-runtime-versions.mjs",
     "check:runtime-rootfs": "node scripts/check-runtime-rootfs-inventory.mjs guest/rootfs/caisson-runtime-rootfs.ext4",
@@ -21,7 +22,7 @@
     "policy:test": "node scripts/test-policy.mjs",
     "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
     "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
-    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts tests/isolation/firecracker-runtime.integration.spec.ts tests/guest/runtime-rootfs-inventory.spec.ts",
+    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-1.spec.ts tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts tests/isolation/firecracker-runtime.integration.spec.ts tests/guest/runtime-rootfs-inventory.spec.ts",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {

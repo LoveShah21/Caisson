@@ -67,6 +67,9 @@ describe("Firecracker M-2 runtime", () => {
     async () => {
       const source = await boot(diagnosticRootfs!);
       await waitForDiagnostic(source);
+      expect(source.host.messages.some((message) => containsSecretShape(JSON.parse(message)))).toBe(
+        false,
+      );
       const snapshot = await source.driver.snapshot(source.prepared.handle, "base");
       await source.driver.destroy(source.prepared.handle);
       await source.host.release(source.prepared.transport);

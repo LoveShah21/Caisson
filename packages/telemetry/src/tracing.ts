@@ -6,6 +6,12 @@ import {
   trace,
 } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import {
+  InMemorySpanExporter,
+  type ReadableSpan,
+  SimpleSpanProcessor,
+  type SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import { BatchSpanProcessor, NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 import type { SpanName } from "./conventions.js";
@@ -14,13 +20,38 @@ const INSTRUMENTATION_NAME = "@caisson/telemetry";
 const INSTRUMENTATION_VERSION = "0.0.0";
 let provider: NodeTracerProvider | undefined;
 
-export function initializeTelemetry(options: { readonly otlpEndpoint?: string } = {}): void {
+/**
+ * Test-only span recorder. It keeps attributes in process memory so security
+ * tests can prove a secret was not attached to a completed span.
+ */
+export interface InMemorySpanRecorder {
+  readonly processor: SpanProcessor;
+  finished(): readonly ReadableSpan[];
+}
+
+export function createInMemorySpanRecorder(): InMemorySpanRecorder {
+  const exporter = new InMemorySpanExporter();
+  return {
+    processor: new SimpleSpanProcessor(exporter),
+    finished: () => exporter.getFinishedSpans(),
+  };
+}
+
+export function initializeTelemetry(
+  options: {
+    readonly otlpEndpoint?: string;
+    /** Test instrumentation only. Production config uses the OTLP endpoint. */
+    readonly spanProcessors?: readonly SpanProcessor[];
+  } = {},
+): void {
   if (provider !== undefined) return;
   provider = new NodeTracerProvider({
     spanProcessors:
-      options.otlpEndpoint === undefined
-        ? []
-        : [new BatchSpanProcessor(new OTLPTraceExporter({ url: options.otlpEndpoint }))],
+      options.spanProcessors === undefined
+        ? options.otlpEndpoint === undefined
+          ? []
+          : [new BatchSpanProcessor(new OTLPTraceExporter({ url: options.otlpEndpoint }))]
+        : [...options.spanProcessors],
   });
   provider.register();
 }

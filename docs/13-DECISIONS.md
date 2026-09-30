@@ -437,7 +437,7 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 
 **Reasoning:** INV-7 and the entropy-distinctness test need observable marker and random values, but those commands are not a production capability and do not belong in the minimal guest surface. The diagnostic rootfs is built from the same runtime source with a compile-time `diagnostic` tag. It adds only a host-initiated vsock diagnostic port after the initial entropy acknowledgement and broker round trip. The production artifact has no diagnostic listener or handlers. A fresh host entropy message is required both for cold boot and every restore; the acknowledgement gates readiness, while distinct kernel-random output across two restores proves the property.
 
-**Consequences:** `caisson-runtime-diagnostic-rootfs.ext4` and `m1-dev-probe-rootfs.ext4` are permanently rejected for production and base-snapshot promotion. The eligible `caisson-runtime-rootfs.ext4` contains only `/init`, `/dev`, and `/proc` plus unavoidable ext4 metadata, checked by the rootfs build. Its explicit `/dev` allowlist is `null`, `random`, and `urandom`; these static nodes let the read-only rootfs mix host-provided entropy without mounting `devtmpfs`. KVM-only tests use the diagnostic artifact but exercise the same entropy, framing, and vsock code as the eligible runtime. The host records every message delivered to the guest before snapshot capture and rejects secret-shaped content in the verification harness.
+**Consequences:** `caisson-runtime-diagnostic-rootfs.ext4` and `m1-dev-probe-rootfs.ext4` are permanently rejected for production and base-snapshot promotion. The eligible `caisson-runtime-rootfs.ext4` contains only `/init`, `/dev`, and `/proc` plus unavoidable ext4 metadata, checked by the rootfs build. Its explicit `/dev` allowlist is `null`, `random`, and `urandom`; these static nodes let the read-only rootfs mix host-provided entropy without mounting `devtmpfs`. KVM-only tests use the diagnostic artifact but exercise the same entropy, framing, and vsock code as the eligible runtime. Before snapshot capture, the verification harness asserts that every recorded guest-visible broker message is free of secret-shaped content.
 
 ---
 
@@ -449,3 +449,36 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** The M-2 measurements use the immutable runtime rootfs, entropy acknowledgement, framed broker-call round trip, and verified S3 cache-hit restore. Those are different workloads and lifecycle boundaries from the M-1 probe and the earlier prepare/start measurements. Comparing them directly would imply a performance conclusion the measurements do not support.
 
 **Consequences:** `bench-boot.mjs` records an explicit `timingModel` and writes the non-comparability note alongside the WSL2 resource-allocation note. The 2026-09-30 KVM measurement records 200 samples: cold p50 1684 ms and p99 1949 ms; S3 cache-hit warm restore p50 177 ms and p99 226 ms. These measurements verify the M-2 runtime path but do not accept or tag M-2; the remaining gate requirements stay listed in the roadmap.
+
+---
+
+## ADR-40: INV-2 verification moves to M-4 with the egress monitor
+**Status:** accepted
+
+**Alternatives:** Claim that the no-network-interface Firecracker configuration proves every INV-2 case in M-2; add an unreviewed network monitor only to close the M-2 gate.
+
+**Reasoning:** INV-2 requires more than a failed connection. It requires the host-side egress monitor to record each blocked attempt with destination, protocol, and timestamp within one second. That monitor is explicitly part of M-4's interception and blocked-egress work. M-2 has no implementation that can truthfully verify the complete invariant.
+
+**Consequences:** M-2's gate excludes INV-2. M-4 owns both the monitor and the full raw-TCP, DNS, HTTP-IP-literal, IPv6, ICMP, host-interface, and metadata-endpoint test matrix. This is a scope correction, not a claim that guest egress is permitted in M-2.
+
+---
+
+## ADR-41: FR-7 capacity proof moves to M-4
+**Status:** accepted
+
+**Alternatives:** Retain a 50-concurrent-session proof in M-2; silently drop the proof.
+
+**Reasoning:** M-2 establishes the single-session lifecycle, broker path, adapters, and base snapshot mechanics. A meaningful 50-session proof also needs the M-4 operational egress and approval components that affect live-session resource use. It is deferred for scope and time rather than represented by an unmeasured claim.
+
+**Consequences:** M-4 must run and publish the FR-7 50-concurrent-session proof. M-2 makes no concurrency-performance claim beyond the measured driver and broker benchmarks.
+
+---
+
+## ADR-42: Diagnostic preflight pauses the one-shot call only for INV-1 inspection
+**Status:** accepted
+
+**Alternatives:** Inspect only after the broker call; add diagnostic commands to the eligible runtime; make the one-shot request wait on a guest-local M-3 interface.
+
+**Reasoning:** INV-1 requires inspection both before and after a brokered action. The diagnostic rootfs already exists solely for KVM verification, but its normal listener starts after the one-shot call, which cannot prove the pre-call state. A diagnostic-only boot argument pauses that call after the entropy acknowledgement until the trusted host diagnostic client sends one bounded `continue_broker` command. The eligible runtime cannot enable this path because it has no diagnostic build.
+
+**Consequences:** The INV-1 test uses `scan_secret_shapes` before and after a real Postgres broker call. The diagnostic scanner returns locations only, never values, and inspects environment variables, every process command line, and the fixed minimal-rootfs footprint plus its diagnostic tmpfs mount. This is test scaffolding, not an agent capability or a production boot option.

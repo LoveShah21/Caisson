@@ -8,3 +8,6 @@ func diagnosticRandom() (string, error)                { panic("diagnostics are 
 func diagnosticWriteMarker(path, value string) error   { panic("diagnostics are unavailable") }
 func diagnosticReadMarker(path string) ([]byte, error) { panic("diagnostics are unavailable") }
 func serveDiagnostics() error                          { return nil }
+func serveDiagnosticsWithControl(listenerReady chan<- error, continueBroker chan<- struct{}) error {
+	return nil
+}

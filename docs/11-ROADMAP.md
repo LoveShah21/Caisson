@@ -20,7 +20,7 @@ FR-8 to FR-12. `IsolationDriver`, both implementations, driver-level snapshot bu
 
 ## M-2. Broker and credential brokering (weeks 3 to 4)
 
-FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, base-snapshot scheduling and storage, the minimal guest runtime for framed `broker.call` vsock and entropy-control messages, live Firecracker vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
+FR-1 to FR-6, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, and the postgres, http, and s3 portion of FR-29. Session lifecycle endpoints, token and transport binding, base-snapshot scheduling and storage, the minimal guest runtime for framed `broker.call` vsock and entropy-control messages, live Firecracker vsock transport, `SecretBackend` with Vault and env implementations, three adapters (postgres, http, s3), connection pooling, timeouts, the error taxonomy, and the core in-process policy evaluator. M-2 policy is default-deny, scope checks, and the `redact_pii` and `role:<name>` obligations. It includes the minimum ClickHouse `actions` table and writer, plus the durable completion buffer, required by FR-23 and FR-26. The github and slack portion of FR-29 is scheduled in M-4.
 
 **Completion checklist:**
 
@@ -34,15 +34,14 @@ FR-1 to FR-7, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 
 - [ ] Define a long-term third-party image supply-chain control, such as a private mirror or freshness check. Two unrelated public registries have stopped serving pinned images during M-2.
 - [ ] Evaluate a PostgreSQL parser for deferred EXPLAIN support against the SELECT bypass suite and maintenance/coverage criteria. M-2 denies EXPLAIN.
-- [ ] Extend the broker secret-canary test to inspect guest-visible output, audit records, telemetry spans, logs, and durable caches from a live guest-to-broker path.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.
-- INV-1, INV-2, INV-3, INV-5 pass.
+- INV-1, INV-3, INV-5 pass. INV-2 is deferred to M-4 with its host-side egress-monitor prerequisite (ADR-40).
 - Forged identity fields in guest requests change nothing.
-- `bench-broker.ts` records overhead against NFR-2.
+- `bench-broker.mjs` records overhead against NFR-2.
 
-**Current status:** Stages A through E are implemented and their completed checks above have been run. M-2 is not accepted or tagged: the full gate still requires INV-1 and INV-2, the broker-overhead benchmark, and final CI verification. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
+**Current status:** Stages A through E are implemented and their completed checks above have been run. M-2 is not accepted or tagged: the full gate still requires INV-1, the broker-overhead benchmark, and final CI verification. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
 
 **M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The Firecracker case subsequently passed during M-2 on a KVM-capable WSL2 environment using the eligible diagnostic runtime rootfs. An unavailable KVM environment must still report an explicit skipped Firecracker case rather than a passing result.
 
@@ -58,12 +57,14 @@ FR-16, FR-17b, FR-37, FR-39 to FR-45, and the remaining non-approval policy work
 
 ## M-4. Approvals and interception (weeks 6 to 7)
 
-FR-46 to FR-54, FR-59 to FR-62, and the github and slack portion of FR-29. Websocket hub, approval queue with timeout, signed decisions, approval UI, redaction pipeline, mitmproxy interceptor, host-side blocked-egress monitor, github adapter, and slack adapter. Github supplies the `createPullRequest` approval journey. Slack supplies approver notifications and the notify obligation.
+FR-7, FR-46 to FR-54, FR-59 to FR-62, and the github and slack portion of FR-29. Websocket hub, approval queue with timeout, signed decisions, approval UI, redaction pipeline, mitmproxy interceptor, host-side blocked-egress monitor, github adapter, and slack adapter. Github supplies the `createPullRequest` approval journey. Slack supplies approver notifications and the notify obligation.
 
 **Gate:**
 - An `always` mode session blocks on every action and resumes on approve.
 - Timeout fails closed with `APPROVAL_TIMEOUT`.
 - INV-6 passes, including replay and self-resolution attempts.
+- INV-2 passes with the host-side blocked-egress monitor.
+- FR-7's 50-concurrent-session proof passes.
 - `git fetch` works in the guest with no credential present.
 - Playwright covers approve, deny, and timeout.
 - An approver sees a sentence, not JSON.

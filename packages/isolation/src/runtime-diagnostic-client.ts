@@ -11,7 +11,9 @@ export type RuntimeDiagnosticRequest =
       readonly path: "/dev/shm/caisson-marker";
       readonly value: string;
     }
-  | { readonly operation: "read_marker"; readonly path: "/dev/shm/caisson-marker" };
+  | { readonly operation: "read_marker"; readonly path: "/dev/shm/caisson-marker" }
+  | { readonly operation: "continue_broker" }
+  | { readonly operation: "scan_secret_shapes" };
 
 export async function callRuntimeDiagnostic(
   vsockPath: string,

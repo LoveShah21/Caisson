@@ -41,6 +41,19 @@ func main() {
 	if err := <-entropyReady; err != nil {
 		fail("entropy control failed")
 	}
+	if diagnosticRuntimeBuild && diagnosticPreflightEnabled() {
+		listenerReady := make(chan error, 1)
+		continueBroker := make(chan struct{}, 1)
+		go func() {
+			if err := serveDiagnosticsWithControl(listenerReady, continueBroker); err != nil {
+				fail("diagnostic control failed")
+			}
+		}()
+		if err := <-listenerReady; err != nil {
+			fail("diagnostic control failed")
+		}
+		<-continueBroker
+	}
 	response, err := brokerCall(request)
 	if err != nil {
 		fail("broker call failed")
@@ -48,7 +61,7 @@ func main() {
 	// The one-shot response is deliberately written only to the serial console.
 	// Snapshot tests inspect host transport messages rather than relying on it.
 	fmt.Fprintln(os.Stdout, string(response))
-	if diagnosticRuntimeBuild {
+	if diagnosticRuntimeBuild && !diagnosticPreflightEnabled() {
 		if err := serveDiagnostics(); err != nil {
 			fail("diagnostic control failed")
 		}
@@ -57,6 +70,19 @@ func main() {
 	// M-2 intentionally has no agent tool surface. Keep PID 1 alive after the
 	// one-shot broker call so a clean base snapshot remains runnable.
 	select {}
+}
+
+func diagnosticPreflightEnabled() bool {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return false
+	}
+	for _, field := range strings.Fields(string(data)) {
+		if field == "caisson.diagnostic_preflight=1" {
+			return true
+		}
+	}
+	return false
 }
 
 func bootRequest() ([]byte, error) {

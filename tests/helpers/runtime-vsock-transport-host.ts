@@ -10,7 +10,9 @@ import {
   decodeBrokerFrameLength,
   encodeBrokerFrame,
   type BrokerCallRequest,
+  type BrokerCallResponse,
 } from "../../packages/protocol/src/index.js";
+import type { TransportPeer } from "../../apps/control-plane/src/index.js";
 import type {
   TransportAttachment,
   TransportDescriptor,
@@ -23,16 +25,52 @@ import type {
  */
 export class RuntimeVsockTransportHost implements TransportHost {
   readonly messages: string[] = [];
+  readonly #handleRequest: (
+    peer: TransportPeer,
+    request: BrokerCallRequest,
+  ) => Promise<BrokerCallResponse>;
+  readonly #peerFor: (descriptor: TransportDescriptor) => TransportPeer;
   readonly #attachments = new Map<string, TransportAttachment>();
   readonly #servers = new Map<string, net.Server>();
   readonly #root = join(tmpdir(), "caisson-runtime-vsock-tests", randomUUID());
+
+  constructor(
+    options: {
+      readonly handleRequest?: (
+        peer: TransportPeer,
+        request: BrokerCallRequest,
+      ) => Promise<BrokerCallResponse>;
+    } = {},
+  ) {
+    this.#handleRequest =
+      options.handleRequest ??
+      (async (_peer, request) =>
+        BrokerCallResponseSchema.parse({
+          id: request.id,
+          ok: true,
+          body: {
+            result: { status: "runtime-test-ok" },
+            meta: {
+              durationMs: 0,
+              redactionCount: 0,
+              roleUsed: "runtime-test",
+              actionId: "018f0000-0000-7000-8000-000000000701",
+            },
+          },
+        }));
+    this.#peerFor = (descriptor) => ({
+      hostId: descriptor.hostId,
+      transportKind: descriptor.kind,
+      peerIdentifier: descriptor.peerIdentifier,
+    });
+  }
 
   async reserve(descriptor: TransportDescriptor): Promise<TransportAttachment> {
     if (descriptor.kind !== "vsock") throw new Error("runtime fixture requires a vsock descriptor");
     const endpointPath = join(this.#root, `${descriptor.peerIdentifier}.sock`);
     await mkdir(dirname(endpointPath), { recursive: true, mode: 0o700 });
     await chmod(dirname(endpointPath), 0o700);
-    const server = net.createServer((socket) => this.#handle(socket));
+    const server = net.createServer((socket) => this.#handle(socket, this.#peerFor(descriptor)));
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(`${endpointPath}_1024`, () => resolve());
@@ -68,7 +106,7 @@ export class RuntimeVsockTransportHost implements TransportHost {
     return attachment.endpointPath;
   }
 
-  #handle(socket: net.Socket): void {
+  #handle(socket: net.Socket, peer: TransportPeer): void {
     const chunks: Buffer[] = [];
     let handled = false;
     socket.on("error", () => undefined);
@@ -93,22 +131,13 @@ export class RuntimeVsockTransportHost implements TransportHost {
         return socket.destroy();
       }
       this.messages.push(JSON.stringify(request));
-      const response = BrokerCallResponseSchema.parse({
-        id: request.id,
-        ok: true,
-        body: {
-          result: { status: "runtime-test-ok" },
-          meta: {
-            durationMs: 0,
-            redactionCount: 0,
-            roleUsed: "runtime-test",
-            actionId: "018f0000-0000-7000-8000-000000000701",
-          },
-        },
-      });
-      const encoded = encodeBrokerFrame(JSON.stringify(response));
-      this.messages.push(JSON.stringify(response));
-      socket.end(encoded);
+      void this.#handleRequest(peer, request)
+        .then((response) => {
+          const encoded = encodeBrokerFrame(JSON.stringify(response));
+          this.messages.push(JSON.stringify(response));
+          socket.end(encoded);
+        })
+        .catch(() => socket.destroy());
     });
   }
 }
