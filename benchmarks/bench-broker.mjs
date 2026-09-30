@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { promisify } from "node:util";
@@ -36,6 +36,7 @@ const request = {
     intent: "measure the broker pipeline without adapter execution",
   },
 };
+const phaseDurations = new Map();
 
 if (!Number.isInteger(samples) || samples < 200) {
   throw new Error("CAISSON_BENCH_SAMPLES must be an integer of at least 200");
@@ -88,29 +89,61 @@ const adapter = {
     },
   },
 };
+const identities = new SessionIdentityResolver(sql);
+const services = new DatabaseBrokerServiceResolver(sql, [adapter]);
+const policyBundles = new PolicyBundleLoader(sql);
+const secrets = new EnvSecretBackend({
+  environment: {
+    CAISSON_POSTGRES_CREDENTIALS: JSON.stringify({
+      kind: "postgres",
+      host: "benchmark.invalid",
+      port: 5432,
+      database: "benchmark",
+      username: "benchmark",
+      password: "benchmark-password-not-a-real-secret",
+      readCredentials: {
+        username: "benchmark_readonly",
+        password: "benchmark-readonly-password-not-a-real-secret",
+      },
+      sslMode: "disable",
+    }),
+  },
+  caissonEnvironment: "development",
+});
 const pipeline = new BrokerPipeline({
-  identities: new SessionIdentityResolver(sql),
-  services: new DatabaseBrokerServiceResolver(sql, [adapter]),
-  policyBundles: new PolicyBundleLoader(sql),
-  secrets: new EnvSecretBackend({
-    environment: {
-      CAISSON_POSTGRES_CREDENTIALS: JSON.stringify({
-        kind: "postgres",
-        host: "benchmark.invalid",
-        port: 5432,
-        database: "benchmark",
-        username: "benchmark",
-        password: "benchmark-password-not-a-real-secret",
-        readCredentials: {
-          username: "benchmark_readonly",
-          password: "benchmark-readonly-password-not-a-real-secret",
-        },
-        sslMode: "disable",
-      }),
+  identities: {
+    resolve: (...arguments_) =>
+      measureAsync("identity.resolve", () => identities.resolve(...arguments_)),
+  },
+  services: {
+    resolveService: async (...arguments_) => {
+      const service = await measureAsync("service.resolve", () =>
+        services.resolveService(...arguments_),
+      );
+      return {
+        ...service,
+        adapter: timedAdapter(service.adapter),
+      };
     },
-    caissonEnvironment: "development",
-  }),
-  audit,
+    resolveCredentialRef: (...arguments_) =>
+      measureAsync("credential_ref.resolve", () => services.resolveCredentialRef(...arguments_)),
+  },
+  policyBundles: {
+    load: async (...arguments_) => {
+      const bundle = await measureAsync("policy.load", () => policyBundles.load(...arguments_));
+      return {
+        ...bundle,
+        evaluator: {
+          evaluate: (input) =>
+            measureSync("policy.evaluate", () => bundle.evaluator.evaluate(input)),
+        },
+      };
+    },
+  },
+  secrets: {
+    fetch: (...arguments_) => measureAsync("credentials.fetch", () => secrets.fetch(...arguments_)),
+  },
+  audit: timedAuditWriter(audit),
 });
 
 await sink.ensureSchema();
@@ -140,6 +173,12 @@ const result = {
   p50Ms: percentile(durations, 0.5),
   p99Ms: percentile(durations, 0.99),
   samplesMs: durations.map((duration) => Math.round(duration * 1000) / 1000),
+  phases: Object.fromEntries(
+    [...phaseDurations.entries()].map(([phase, values]) => [
+      phase,
+      { p50Ms: percentile(values, 0.5), p99Ms: percentile(values, 0.99) },
+    ]),
+  ),
   machine: {
     platform: process.platform,
     release: os.release(),
@@ -160,6 +199,9 @@ await writeFile(
 process.stdout.write(
   `broker overhead: p50 ${result.p50Ms}ms, p99 ${result.p99Ms}ms, ${samples} samples\n`,
 );
+for (const [phase, values] of Object.entries(result.phases)) {
+  process.stdout.write(`  ${phase}: p50 ${values.p50Ms}ms, p99 ${values.p99Ms}ms\n`);
+}
 if (result.p99Ms >= result.nfr2TargetP99Ms) {
   process.exitCode = 1;
   process.stderr.write("NFR-2 missed: broker p99 must be below 50ms\n");
@@ -195,4 +237,61 @@ function required(name) {
   const value = process.env[name];
   if (value === undefined || value === "") throw new Error(`missing ${name}`);
   return value;
+}
+
+function timedAdapter(adapter) {
+  return {
+    ...adapter,
+    methods: Object.fromEntries(
+      Object.entries(adapter.methods).map(([name, method]) => [
+        name,
+        {
+          ...method,
+          execute: (...arguments_) =>
+            measureAsync("adapter.baseline_execute", () => method.execute(...arguments_)),
+        },
+      ]),
+    ),
+  };
+}
+
+function timedAuditWriter(writer) {
+  return new Proxy(writer, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === "persistBeforeExecution" && typeof value === "function") {
+        return (...arguments_) =>
+          measureAsync("audit.pre_execution", () => value.apply(target, arguments_));
+      }
+      if (property === "persistDurably" && typeof value === "function") {
+        return (...arguments_) =>
+          measureAsync("audit.terminal_enqueue", () => value.apply(target, arguments_));
+      }
+      return value;
+    },
+  });
+}
+
+async function measureAsync(phase, operation) {
+  const startedAt = performance.now();
+  try {
+    return await operation();
+  } finally {
+    recordPhase(phase, performance.now() - startedAt);
+  }
+}
+
+function measureSync(phase, operation) {
+  const startedAt = performance.now();
+  try {
+    return operation();
+  } finally {
+    recordPhase(phase, performance.now() - startedAt);
+  }
+}
+
+function recordPhase(phase, duration) {
+  const values = phaseDurations.get(phase) ?? [];
+  values.push(duration);
+  phaseDurations.set(phase, values);
 }
