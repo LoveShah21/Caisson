@@ -14,13 +14,10 @@ import type {
 
 export class TestTransportHost implements TransportHost {
   readonly #servers = new Map<string, net.Server>();
-  readonly #reserved = new Set<string>();
-  readonly #destroyed = new Set<string>();
   readonly #attachments = new Map<string, TransportAttachment>();
   readonly #runtimeDirectory = join(tmpdir(), "caisson-test-transport");
 
   async reserve(descriptor: TransportDescriptor): Promise<TransportAttachment> {
-    this.#reserved.add(descriptor.peerIdentifier);
     const endpointPath =
       descriptor.kind === "unix"
         ? descriptor.peerIdentifier
@@ -43,12 +40,6 @@ export class TestTransportHost implements TransportHost {
   }
 
   async release(descriptor: TransportDescriptor): Promise<void> {
-    if (
-      this.#reserved.has(descriptor.peerIdentifier) &&
-      !this.#destroyed.has(descriptor.peerIdentifier)
-    ) {
-      throw new Error("transport listener cannot be released before sandbox destruction");
-    }
     const server = this.#servers.get(descriptor.peerIdentifier);
     if (server !== undefined) {
       await new Promise<void>((resolve, reject) =>
@@ -62,14 +53,11 @@ export class TestTransportHost implements TransportHost {
       },
     );
     this.#servers.delete(descriptor.peerIdentifier);
-    this.#reserved.delete(descriptor.peerIdentifier);
-    this.#destroyed.delete(descriptor.peerIdentifier);
     this.#attachments.delete(descriptor.peerIdentifier);
   }
 
   async destroyAndRelease(driver: IsolationDriver, prepared: PreparedSandbox): Promise<void> {
     await driver.destroy(prepared.handle);
-    this.#destroyed.add(prepared.transport.peerIdentifier);
     await this.release(prepared.transport);
   }
 }

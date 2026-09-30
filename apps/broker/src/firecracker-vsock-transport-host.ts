@@ -1,5 +1,4 @@
 import { chmod, mkdir, rm } from "node:fs/promises";
-import net from "node:net";
 import { dirname, join } from "node:path";
 
 import type { TransportAttachment, TransportDescriptor, TransportHost } from "@caisson/isolation";

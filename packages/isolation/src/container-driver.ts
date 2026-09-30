@@ -77,15 +77,15 @@ export class ContainerDriver implements IsolationDriver {
       peerIdentifier: join(this.#transportDirectory, `${randomUUID()}.sock`),
     };
     const attachment = await transportHost.reserve(transport);
-    if (
-      attachment.descriptor.kind !== transport.kind ||
-      attachment.descriptor.hostId !== transport.hostId ||
-      attachment.descriptor.peerIdentifier !== transport.peerIdentifier ||
-      attachment.endpointPath !== transport.peerIdentifier
-    ) {
-      throw new CaissonError("SANDBOX_FAILED", "container transport attachment is invalid");
-    }
     try {
+      if (
+        attachment.descriptor.kind !== transport.kind ||
+        attachment.descriptor.hostId !== transport.hostId ||
+        attachment.descriptor.peerIdentifier !== transport.peerIdentifier ||
+        attachment.endpointPath !== transport.peerIdentifier
+      ) {
+        throw new CaissonError("SANDBOX_FAILED", "container transport attachment is invalid");
+      }
       const workspaceSizeMiB = spec.workspaceSizeMiB ?? DEFAULT_WORKSPACE_SIZE_MIB;
       const create = await runCommand(this.#dockerPath, [
         "create",
@@ -120,6 +120,10 @@ export class ContainerDriver implements IsolationDriver {
         throw new CaissonError("SANDBOX_FAILED", "container sandbox creation failed");
       }
     } catch (error: unknown) {
+      // Docker can leave a partially-created container after a failed create.
+      // Remove it before releasing the broker-owned endpoint so an untracked
+      // sandbox never retains access to a transport identity.
+      await runCommand(this.#dockerPath, ["rm", "-f", name]);
       await transportHost.release(transport);
       throw error;
     }

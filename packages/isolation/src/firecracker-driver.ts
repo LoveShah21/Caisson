@@ -1,8 +1,8 @@
 import type { SpawnOptions } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import net from "node:net";
 import { access, constants, mkdir, open, rm } from "node:fs/promises";
+import net from "node:net";
 import { join } from "node:path";
 
 import { BrokerCallRequestSchema, CaissonError, type DriverCapabilities } from "@caisson/protocol";
