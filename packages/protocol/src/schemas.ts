@@ -4,7 +4,12 @@ import { ErrorCodeSchema } from "./errors.js";
 
 export const SessionIdSchema = z.string().uuid();
 export const TraceIdSchema = z.string().min(1).max(128);
-export const BrokerFrameIdSchema = z.string().min(1).max(128);
+export const BrokerFrameIdSchema = z
+  .string()
+  .min(1)
+  .refine((value) => new TextEncoder().encode(value).byteLength <= 128, {
+    message: "frame id exceeds 128 UTF-8 bytes",
+  });
 const BrokerErrorMessageSchema = z.string().min(1).max(512);
 const BrokerErrorDetailValueSchema = z.union([
   z.string().max(512),
@@ -52,6 +57,150 @@ export const BrokerCallRequestSchema = z
   })
   .strict();
 
+export const WorkspacePathSchema = z.string().min(1).max(4096);
+const WorkspaceContentSchema = z.string().max(2 * 1024 * 1024);
+const WorkspaceMatchSchema = z
+  .string()
+  .min(1)
+  .max(2 * 1024 * 1024);
+const ToolRequestBaseSchema = z.object({ id: BrokerFrameIdSchema });
+
+export const FsReadRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("fs.read"),
+  body: z
+    .object({
+      path: WorkspacePathSchema,
+      range: z
+        .object({
+          start: z.number().int().nonnegative(),
+          end: z.number().int().positive(),
+        })
+        .strict()
+        .refine((range) => range.end > range.start, "range end must exceed start")
+        .optional(),
+    })
+    .strict(),
+}).strict();
+
+export const FsWriteRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("fs.write"),
+  body: z.object({ path: WorkspacePathSchema, content: WorkspaceContentSchema }).strict(),
+}).strict();
+
+export const FsEditRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("fs.edit"),
+  body: z
+    .object({
+      path: WorkspacePathSchema,
+      oldString: WorkspaceMatchSchema,
+      newString: WorkspaceContentSchema,
+    })
+    .strict(),
+}).strict();
+
+export const FsSearchRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("fs.search"),
+  body: z
+    .object({
+      pattern: z.string().min(1).max(4096),
+      path: WorkspacePathSchema.optional(),
+      opts: z
+        .object({
+          fixedStrings: z.boolean().optional(),
+          caseSensitive: z.boolean().optional(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+}).strict();
+
+export const ProcExecRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("proc.exec"),
+  body: z
+    .object({
+      argv: z.array(z.string().min(1).max(8192)).min(1).max(128),
+      cwd: WorkspacePathSchema.optional(),
+      timeoutMs: z.number().int().positive().max(300_000).optional(),
+    })
+    .strict(),
+}).strict();
+
+export const UserAskRequestSchema = ToolRequestBaseSchema.extend({
+  op: z.literal("user.ask"),
+  body: z
+    .object({
+      question: z.string().trim().min(1).max(8192),
+      options: z.array(z.string().trim().min(1).max(1024)).min(1).max(20).optional(),
+    })
+    .strict(),
+}).strict();
+
+export const LocalToolRequestSchema = z.union([
+  FsReadRequestSchema,
+  FsWriteRequestSchema,
+  FsEditRequestSchema,
+  FsSearchRequestSchema,
+  ProcExecRequestSchema,
+  UserAskRequestSchema,
+]);
+
+export const LocalAuthorizedResponseSchema = z
+  .object({
+    id: BrokerFrameIdSchema,
+    ok: z.literal(true),
+    body: z
+      .object({
+        actionId: SessionIdSchema,
+        authorized: z.literal(true),
+      })
+      .strict(),
+  })
+  .strict();
+
+const LocalCompletionErrorSchema = z
+  .object({
+    code: ErrorCodeSchema,
+    message: BrokerErrorMessageSchema,
+    details: BrokerErrorDetailsSchema,
+  })
+  .strict();
+
+export const LocalCompletionRequestSchema = z
+  .object({
+    id: BrokerFrameIdSchema,
+    op: z.literal("local.completed"),
+    body: z
+      .union([
+        z
+          .object({
+            actionId: SessionIdSchema,
+            outcome: z.literal("success"),
+            result: z.json(),
+          })
+          .strict(),
+        z
+          .object({
+            actionId: SessionIdSchema,
+            outcome: z.literal("failure"),
+            error: LocalCompletionErrorSchema,
+          })
+          .strict(),
+      ])
+      .refine(
+        (body) =>
+          (body.outcome === "success" && "result" in body) ||
+          (body.outcome === "failure" && "error" in body),
+        "local completion does not match its outcome",
+      ),
+  })
+  .strict();
+
+export const AgentOperationRequestSchema = z.union([
+  BrokerCallRequestSchema,
+  LocalToolRequestSchema,
+]);
+
 export const BrokerCallResponseSchema = z.union([
   z
     .object({
@@ -87,6 +236,46 @@ export const BrokerCallResponseSchema = z.union([
         .strict(),
     })
     .strict(),
+]);
+
+export const LocalToolResponseSchema = z.union([
+  z
+    .object({
+      id: BrokerFrameIdSchema,
+      ok: z.literal(true),
+      body: z
+        .object({
+          result: z.json(),
+          meta: z
+            .object({
+              actionId: SessionIdSchema,
+              durationMs: z.number().int().nonnegative(),
+              truncated: z.boolean().optional(),
+            })
+            .strict(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      id: BrokerFrameIdSchema,
+      ok: z.literal(false),
+      error: z
+        .object({
+          code: ErrorCodeSchema,
+          message: BrokerErrorMessageSchema,
+          details: BrokerErrorDetailsSchema,
+          actionId: SessionIdSchema.optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+export const AgentOperationResponseSchema = z.union([
+  BrokerCallResponseSchema,
+  LocalToolResponseSchema,
 ]);
 
 export const DriverCapabilitiesSchema = z
@@ -176,6 +365,12 @@ export type ApprovalMode = z.infer<typeof ApprovalModeSchema>;
 export type BrokerCallBody = z.infer<typeof BrokerCallBodySchema>;
 export type BrokerCallRequest = z.infer<typeof BrokerCallRequestSchema>;
 export type BrokerCallResponse = z.infer<typeof BrokerCallResponseSchema>;
+export type AgentOperationRequest = z.infer<typeof AgentOperationRequestSchema>;
+export type AgentOperationResponse = z.infer<typeof AgentOperationResponseSchema>;
+export type LocalToolRequest = z.infer<typeof LocalToolRequestSchema>;
+export type LocalToolResponse = z.infer<typeof LocalToolResponseSchema>;
+export type LocalAuthorizedResponse = z.infer<typeof LocalAuthorizedResponseSchema>;
+export type LocalCompletionRequest = z.infer<typeof LocalCompletionRequestSchema>;
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
 export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>;

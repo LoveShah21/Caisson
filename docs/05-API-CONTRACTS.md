@@ -16,7 +16,7 @@ Three surfaces: the operator REST API, the approval websocket, and the guest-to-
 
 ### Error code enum (v1)
 
-`INVALID_REQUEST`, `SESSION_NOT_FOUND`, `SESSION_NOT_READY`, `SESSION_EXPIRED`, `SCOPE_DENIED`, `POLICY_DENIED`, `POLICY_UNAVAILABLE`, `APPROVAL_REQUIRED`, `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `SECRET_UNAVAILABLE`, `AUDIT_UNAVAILABLE`, `ADAPTER_NOT_FOUND`, `METHOD_NOT_FOUND`, `PARAMS_INVALID`, `SERVICE_TIMEOUT`, `SERVICE_ERROR`, `RATE_LIMITED`, `SANDBOX_FAILED`, `BINARY_NOT_ALLOWED`, `PATH_DENIED`, `INTERNAL`.
+`INVALID_REQUEST`, `SESSION_NOT_FOUND`, `SESSION_NOT_READY`, `SESSION_EXPIRED`, `SCOPE_DENIED`, `POLICY_DENIED`, `POLICY_UNAVAILABLE`, `APPROVAL_REQUIRED`, `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `APPROVAL_UNAVAILABLE`, `SECRET_UNAVAILABLE`, `AUDIT_UNAVAILABLE`, `ADAPTER_NOT_FOUND`, `METHOD_NOT_FOUND`, `PARAMS_INVALID`, `SERVICE_TIMEOUT`, `SERVICE_ERROR`, `RATE_LIMITED`, `SANDBOX_FAILED`, `BINARY_NOT_ALLOWED`, `PATH_DENIED`, `INTERNAL`.
 
 ## 2. Operator REST API
 
@@ -129,7 +129,7 @@ Client to server: `subscribe`, `unsubscribe`, `approval.decide`, `question.answe
 
 ## 4. Guest to broker protocol
 
-Transport: vsock, length-prefixed frames, one request in flight per frame id. Never HTTP over a network interface, because a network interface is a thing the guest could otherwise reach. A frame begins with a four-byte unsigned big-endian payload length (`UInt32BE`), followed by that many UTF-8 JSON payload bytes. The length excludes the prefix and may not exceed 16 MiB (16,777,216 bytes). The host reads no more than the declared bounded length. A declared oversize length, a read timeout, a truncated frame, or an unexpected close closes the connection without a response. A syntactically complete frame whose JSON or Zod schema is invalid receives one error frame when writable, then the connection closes. No connection is reused after a malformed frame.
+Transport: vsock, length-prefixed frames, one request in flight per frame id. Never HTTP over a network interface, because a network interface is a thing the guest could otherwise reach. A frame begins with a four-byte unsigned big-endian payload length (`UInt32BE`), followed by that many UTF-8 JSON payload bytes. The length excludes the prefix and may not exceed 16 MiB (16,777,216 bytes). The host reads no more than the declared bounded length. A declared oversize length, a read timeout, a truncated frame, or an unexpected close closes the connection without a response. A syntactically complete frame whose JSON or Zod schema is invalid receives one error frame when writable, then the connection closes. No connection is reused after a malformed frame. `broker.call` is single-frame. The local-tool authorization exchange below is the only M-3 multi-frame connection mode.
 
 ### broker.call
 ```jsonc
@@ -166,7 +166,51 @@ unframeable response.
 ### Other ops
 `fs.read`, `fs.write`, `fs.edit`, `fs.search`, `proc.exec`, `user.ask`. All cross the same vsock transport and are audited outside the guest. Together with `broker.call`, they are the seven operations covered by FR-55 and INV-4.
 
-`proc.exec` request body is `{ "argv": ["rg","-n","checkout","src/"], "cwd": "/workspace", "timeoutMs": 30000 }`. There is no `command` string field, no `shell` flag, and no way to add one. FR-41.
+The request bodies are:
+
+| Operation | Body |
+|---|---|
+| `fs.read` | `{ path, range?: { start, end } }`, where the range is byte-based, start-inclusive, and end-exclusive |
+| `fs.write` | `{ path, content }` |
+| `fs.edit` | `{ path, oldString, newString }`; `oldString` must be non-empty and match exactly once |
+| `fs.search` | `{ pattern, path?, opts?: { fixedStrings?, caseSensitive? } }` |
+| `proc.exec` | `{ argv, cwd?, timeoutMs? }` |
+| `user.ask` | `{ question, options? }` |
+
+Every request is `{ id, op, body }`, where `id` is at most 128 UTF-8 bytes. Unknown fields are rejected. Paths are subsequently resolved and confined to `/workspace`; schema validation alone is not a path authorization decision. Content is capped at 2 MiB, patterns and paths at 4096 characters, argv at 128 entries of at most 8192 characters each, questions at 8192 characters, and options at twenty entries of at most 1024 characters each. Implementations also enforce byte caps before allocation or execution.
+
+#### Local-tool authorization exchange
+
+The existing broker transport accepts one frame and closes. Local tools add a stateful, one-operation connection with exactly this sequence:
+
+```text
+guest -> host: { id, op: fs.* | proc.exec | user.ask, body }
+host  -> guest: { id, ok: true, body: { actionId, authorized: true } }
+guest executes the authorized local operation
+guest -> host: { id, op: "local.completed", body: { actionId, outcome, result } }
+host  -> guest: { id, ok: true, body: { result, meta: { actionId, durationMs } } }
+host closes the connection
+```
+
+The host sends `authorized: true` only after transport-bound identity resolution, policy evaluation, host-side `proc.exec` allowlist validation where applicable, and synchronous `action.started` delivery. A denied authorization has the ordinary structured error response and closes without guest execution.
+
+For `outcome: "success"`, `local.completed.body` is `{ actionId, outcome: "success", result }`. For `outcome: "failure"`, it is `{ actionId, outcome: "failure", error: { code, message, details } }`. `local.completed` is transport control, not an eighth agent operation; it cannot initiate an action and is rejected unless the same connection has one pending authorized local operation.
+
+`CAISSON_LOCAL_TOOL_COMPLETION_TIMEOUT_MS` is required positive startup configuration. It bounds the interval from `local.authorized` until a complete `local.completed` frame arrives. A missing completion because the guest hangs, crashes, is killed, closes the connection, or exceeds this timeout produces durable terminal event `action.abandoned`, with error code `SANDBOX_FAILED` and no guest-provided result. The host closes the connection. This terminal event is distinct from a guest-reported execution failure.
+
+`local.completed` contains a bounded frame `result`, not guest-reported byte counts or an audit preview. The host serializes `result`, measures its UTF-8 bytes, and derives the only persisted preview itself using required `CAISSON_LOCAL_TOOL_AUDIT_PREVIEW_MAX_BYTES`. If the serialized result exceeds required `CAISSON_LOCAL_TOOL_RESULT_MAX_BYTES`, the action remains truthfully completed but the host returns `{ truncated: true, preview }` in place of the original result. `preview` is host-derived and bounded to the result cap; the audit record retains the original `resultBytes` and `resultHash`. The audit preview is scrubbed with `containsSecretShape`; it is never accepted from the guest. This makes the host, rather than the guest, authoritative for `resultBytes`, `resultHash`, and `paramsPreview`.
+
+A syntactically invalid, schema-invalid, duplicate, wrong-id, or wrong-`actionId` completion after authorization produces durable terminal event `action.invalid_completion`, with error code `PARAMS_INVALID`, no raw malformed payload stored, and a structured error frame if the socket remains writable. The host then closes the connection. A frame, close, or timeout failure between `local.authorized` and the terminal response is never reusable: the connection closes and the already-started action receives exactly one durable terminal event (`action.abandoned` or `action.invalid_completion`).
+
+The final guest response waits for the terminal event to commit to the Postgres `audit_outbox`, then closes. It does not wait for ClickHouse delivery. This is the M-2 fail-durable completion model: the queued event is durable and ordered, while ClickHouse delivery is retried by the existing outbox drainer. No latency estimate is asserted here; M-3 must measure this path with the benchmark scripts before making an NFR-2 claim.
+
+M-3 uses one shared required completion timeout across local operations. This is an intentional interim limit, not an assertion that `fs.read`, `fs.search`, and `proc.exec` have identical expected durations. Per-operation timeout policy is deferred to a later capability-policy review; M-3 operators choose a value appropriate for the enabled allowlist.
+
+The host validates both request and final response before forwarding them to the agent.
+
+`proc.exec` has no `command` string field, no `shell` flag, and no way to add one. FR-41. Its `process.exec` scope gates the fixed v1 allowlist as a whole; per-binary scopes are outside M-3.
+
+`user.ask` is structurally present in M-3, but M-4 owns approver authentication and the websocket hub. In M-3 it validates and audits the request, then returns `APPROVAL_UNAVAILABLE`. The endpoint does not treat the unauthenticated websocket URL as a credential.
 
 ### What the guest never receives
 A token value, a credential, an approval nonce, another session's identifier, or the host's view of its own identity. If a field would let the guest assert who it is, it does not exist in this protocol.

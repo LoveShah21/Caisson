@@ -4,5 +4,7 @@ export * from "./database-service-resolver.js";
 export * from "./firecracker-vsock-transport-host.js";
 export * from "./framed-broker-server.js";
 export * from "./http-adapter.js";
+export * from "./local-tool-pipeline.js";
+export * from "./local-tool-server.js";
 export * from "./postgres-adapter.js";
 export * from "./s3-adapter.js";
