@@ -156,7 +156,10 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
 			return
 		}
-		writeDiagnostic(fd, diagnosticResponse{Error: "network probe failed"})
+		// This diagnostic-only response contains only a local process status.
+		// It is needed to distinguish an absent network route from a missing
+		// runtime dependency during the KVM verification.
+		writeDiagnostic(fd, diagnosticResponse{Error: fmt.Sprintf("network probe %s failed: %v", request.Value, err)})
 		return
 	}
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})

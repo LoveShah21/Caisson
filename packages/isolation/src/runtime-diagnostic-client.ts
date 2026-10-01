@@ -49,12 +49,13 @@ export async function callRuntimeDiagnostic(
       }
       try {
         const response: unknown = JSON.parse(line);
-        if (
-          typeof response !== "object" ||
-          response === null ||
-          (response as { ok?: unknown }).ok !== true
-        )
+        if (typeof response !== "object" || response === null) {
           return fail("invalid diagnostic response");
+        }
+        if ((response as { ok?: unknown }).ok !== true) {
+          const error = (response as { error?: unknown }).error;
+          return fail(typeof error === "string" ? error : "invalid diagnostic response");
+        }
         clearTimeout(timer);
         socket.destroy();
         resolve(response as { ok: boolean; value?: string });
