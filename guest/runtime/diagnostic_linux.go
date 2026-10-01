@@ -177,14 +177,16 @@ try:
 except OSError as e:
  print(e.errno, file=sys.stderr);sys.exit(0 if e.errno == 101 else 1)`
 	path := "/usr/bin/node"
+	argument := "--eval"
 	program := nodeProgram
 	if runtime == "python3" {
 		path = "/usr/bin/python3"
+		argument = "-c"
 		program = pythonProgram
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, path, "-c", program)
+	command := exec.CommandContext(ctx, path, argument, program)
 	command.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/tmp"}
 	output, err := command.CombinedOutput()
 	if err == nil {
