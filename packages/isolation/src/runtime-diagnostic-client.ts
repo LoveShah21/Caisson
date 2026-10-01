@@ -13,7 +13,8 @@ export type RuntimeDiagnosticRequest =
     }
   | { readonly operation: "read_marker"; readonly path: "/dev/shm/caisson-marker" }
   | { readonly operation: "continue_broker" }
-  | { readonly operation: "scan_canary" };
+  | { readonly operation: "scan_canary" }
+  | { readonly operation: "network_probe"; readonly value: "node" | "python3" };
 
 export async function callRuntimeDiagnostic(
   vsockPath: string,

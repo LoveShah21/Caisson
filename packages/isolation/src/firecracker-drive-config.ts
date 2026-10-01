@@ -2,6 +2,7 @@ import { basename } from "node:path";
 
 const M1_DEV_PROBE_ROOTFS = "m1-dev-probe-rootfs.ext4";
 const DIAGNOSTIC_RUNTIME_ROOTFS = "caisson-runtime-diagnostic-rootfs.ext4";
+const AGENT_RUNTIME_DIAGNOSTIC_ROOTFS = "caisson-agent-runtime-diagnostic-rootfs.ext4";
 
 export function firecrackerRootfsDriveConfig(
   rootfsPath: string,
@@ -23,5 +24,9 @@ export function isM1DevelopmentProbeRootfs(rootfsPath: string): boolean {
 /** Development probes and test diagnostics must never become promoted bases. */
 export function isIneligibleBaseRootfs(rootfsPath: string): boolean {
   const name = basename(rootfsPath);
-  return name === M1_DEV_PROBE_ROOTFS || name === DIAGNOSTIC_RUNTIME_ROOTFS;
+  return (
+    name === M1_DEV_PROBE_ROOTFS ||
+    name === DIAGNOSTIC_RUNTIME_ROOTFS ||
+    name === AGENT_RUNTIME_DIAGNOSTIC_ROOTFS
+  );
 }

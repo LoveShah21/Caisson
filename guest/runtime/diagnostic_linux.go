@@ -4,16 +4,18 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -148,7 +150,52 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			return
 		}
 	}
+	if request.Operation == "network_probe" && request.Path == "" && (request.Value == "node" || request.Value == "python3") {
+		value, err := diagnosticNetworkProbe(request.Value)
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
+			return
+		}
+		writeDiagnostic(fd, diagnosticResponse{Error: "network probe failed"})
+		return
+	}
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})
+}
+
+// diagnosticNetworkProbe is test-only. It invokes the real packaged runtime
+// without a shell and reports only whether a network connection succeeded.
+func diagnosticNetworkProbe(runtime string) (string, error) {
+	const nodeProgram = `const net=require("node:net");const s=net.connect({host:"1.1.1.1",port:443});s.on("connect",()=>process.exit(2));s.on("error",e=>process.exit(e&&e.code==="ENETUNREACH"?0:1));s.setTimeout(1000,()=>process.exit(1));`
+	const pythonProgram = `import socket,sys
+s=socket.socket();s.settimeout(1)
+try:
+ s.connect(("1.1.1.1",443));sys.exit(2)
+except OSError as e:
+ sys.exit(0 if e.errno == 101 else 1)`
+	path := "/usr/bin/node"
+	program := nodeProgram
+	if runtime == "python3" {
+		path = "/usr/bin/python3"
+		program = pythonProgram
+	}
+	command := exec.Command(path, "-c", program)
+	command.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/tmp"}
+	if err := command.Start(); err != nil {
+		return "", err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return "network-unreachable", nil
+		}
+		return "", fmt.Errorf("runtime did not receive ENETUNREACH: %w", err)
+	case <-time.After(2 * time.Second):
+		_ = command.Process.Kill()
+		<-done
+		return "", fmt.Errorf("network probe timed out")
+	}
 }
 
 // INV-1 uses a separately generated AWS-access-key-shaped canary. Scanning

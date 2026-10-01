@@ -10,3 +10,5 @@ coverage/
 guest/rootfs/m1-dev-probe-rootfs.ext4
 guest/rootfs/caisson-runtime-rootfs.ext4
 guest/rootfs/caisson-runtime-diagnostic-rootfs.ext4
+guest/rootfs/caisson-agent-runtime-rootfs.ext4
+guest/rootfs/caisson-agent-runtime-diagnostic-rootfs.ext4

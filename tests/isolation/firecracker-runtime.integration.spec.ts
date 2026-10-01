@@ -14,6 +14,7 @@ import { RuntimeVsockTransportHost } from "../helpers/runtime-vsock-transport-ho
 
 const runtimeRootfs = process.env.CAISSON_RUNTIME_ROOTFS;
 const diagnosticRootfs = process.env.CAISSON_RUNTIME_DIAGNOSTIC_ROOTFS;
+const agentDiagnosticRootfs = process.env.CAISSON_AGENT_RUNTIME_DIAGNOSTIC_ROOTFS;
 const kvmEnabled =
   process.env.CAISSON_RUNTIME_KVM_TESTS === "1" &&
   process.platform === "linux" &&
@@ -98,6 +99,32 @@ describe("Firecracker M-2 runtime", () => {
     },
     120_000,
   );
+
+  it.skipIf(
+    !(
+      process.env.CAISSON_RUNTIME_KVM_TESTS === "1" &&
+      process.platform === "linux" &&
+      agentDiagnosticRootfs !== undefined &&
+      hasKvmAccess()
+    ),
+  )(
+    "runs real node and python3 without a guest network interface",
+    async () => {
+      const context = await boot(agentDiagnosticRootfs!);
+      try {
+        expect((await waitForDiagnostic(context, { operation: "network_probe", value: "node" })).value).toBe(
+          "network-unreachable",
+        );
+        expect(
+          (await waitForDiagnostic(context, { operation: "network_probe", value: "python3" })).value,
+        ).toBe("network-unreachable");
+      } finally {
+        await context.driver.destroy(context.prepared.handle);
+        await context.host.release(context.prepared.transport);
+      }
+    },
+    90_000,
+  );
 });
 
 async function boot(rootfsPath: string) {
@@ -165,7 +192,7 @@ async function waitForDiagnostic(
     prepared: PreparedSandbox;
     host: RuntimeVsockTransportHost;
   },
-  operation: { operation: "random" } = { operation: "random" },
+  operation: Parameters<typeof callRuntimeDiagnostic>[1] = { operation: "random" },
 ) {
   const path = context.host.endpointFor(context.prepared.transport);
   let lastError: unknown;

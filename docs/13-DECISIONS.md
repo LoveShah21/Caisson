@@ -493,3 +493,25 @@ Postgres for mutable operational state, ClickHouse for the immutable audit recor
 **Reasoning:** A new action must not execute before `action.started` is accepted by ClickHouse, but serial one-row inserts make the audit store dominate broker overhead on the local single-node deployment. ClickHouse's `async_insert=1` with `wait_for_async_insert=1` batches host-side inserts and responds only after the buffered insert has flushed. Its one-millisecond busy timeout bounds batching delay while retaining the same acknowledgement requirement as a normal insert.
 
 **Consequences:** The audit writer uses these settings only for action inserts. It serializes the pending events for one locked session into one sequence-sorted JSONEachRow request, so an earlier terminal record and the next `action.started` do not pay two HTTP round trips. A successful pre-execution response remains the fail-closed boundary. A failed or ambiguous batch leaves every attempted row pending, increments each attempt count, and retries under the existing per-session lock with `(session_id, seq)` lookup. The M-2 benchmark must measure the configured path; this ADR does not claim that NFR-2 or NFR-4 is met until a real result is recorded.
+
+---
+
+## ADR-44: M-3 local tools require host authorization and audit before guest execution
+**Status:** accepted
+
+**Alternatives:** Execute workspace and subprocess tools in the guest without host involvement; move the guest workspace to a host-visible mount and execute every tool on the host; defer the runtime until M-4 approval authentication exists.
+
+**Reasoning:** `/workspace` is guest tmpfs and must remain private to the session, so host-side filesystem execution would add an unnecessary shared writable surface. Local tools therefore execute in the guest only after a host-side framed authorization request resolves the transport-bound session, evaluates policy, and synchronously persists an `action.started` record. A terminal record carries only a bounded, secret-scrubbed preview. `process.exec` uses one scope because the normative fixed binary allowlist, enforced independently by the host and guest, is the M-3 capability boundary. `user.ask` cannot create an approval channel until M-4 defines approver authentication.
+
+**Consequences:** The M-3 protocol adds `fs.read`, `fs.write`, `fs.edit`, `fs.search`, `proc.exec`, and `user.ask` beside `broker.call`. Their scopes are `workspace.read`, `workspace.write`, `process.exec`, and `user.ask`. Missing or invalid local-result preview configuration prevents startup. Preview values that are secret-shaped are never persisted. `user.ask` validates and audits its request, then returns the structured `APPROVAL_UNAVAILABLE` denial until M-4 ships an authenticated websocket hub. Per-binary process scopes are deliberately deferred to a later scope-design task.
+
+---
+
+## ADR-45: M-3 agent runtime uses a verified, locked Alpine rootfs
+**Status:** accepted
+
+**Alternatives:** Keep the M-2 static-only rootfs and provide command shims; use a moving distro image or package index; build every tool from source immediately.
+
+**Reasoning:** M-3 needs real `rg`, `jq`, restricted `git`, `node`, and `python3` binaries, while preserving an inspectable, reproducible rootfs. The build pins Alpine 3.21.6 x86_64 and the exact SHA-256 of `alpine-minirootfs-3.21.6-x86_64.tar.gz`. It imports `ncopa.asc` only after comparing its primary fingerprint, `0482D84022F52DF1C4E7CD43293ACD0907D9495A`, to Alpine's independently hosted official downloads page. It then verifies the detached release signature and the pinned SHA-256 in the checked-in build script. The release announcement for 3.21.6 was published on 2026-01-27; the release key comes from the separate `alpinelinux.org` key endpoint. Every additional package archive is locked by filename, version, and SHA-256 before extraction. The lock was generated from currently reachable v3.21 repositories; rebuilds do not resolve dependencies from a live index.
+
+**Consequences:** The runtime uses musl. This is acceptable only while it has no native Node addons, no Python C-extension packages, and no guest package installation. Any change to those conditions requires a rootfs and toolchain design review. `node` and `python3` are real Alpine runtimes; their lack of general network access comes from the guest's absent network interface, not language-level restrictions. The inventory test lists the complete files and shared libraries supplied by the locked base and package closure. If Alpine's release artifacts or locked packages cease to be available, the fallback is a reviewed per-tool source build, following the same supply-chain posture as the MinIO fallback in ADR-28.
