@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -168,37 +169,31 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 // diagnosticNetworkProbe is test-only. It invokes the real packaged runtime
 // without a shell and reports only whether a network connection succeeded.
 func diagnosticNetworkProbe(runtime string) (string, error) {
-	const nodeProgram = `const net=require("node:net");const s=net.connect({host:"1.1.1.1",port:443});s.on("connect",()=>process.exit(2));s.on("error",e=>process.exit(e&&e.code==="ENETUNREACH"?0:1));s.setTimeout(1000,()=>process.exit(1));`
+	const nodeProgram = `const net=require("node:net");const s=net.connect({host:"1.1.1.1",port:443});s.on("connect",()=>process.exit(2));s.on("error",e=>{process.stderr.write(String(e&&e.code));process.exit(e&&e.code==="ENETUNREACH"?0:1)});s.setTimeout(1000,()=>{process.stderr.write("ETIMEDOUT");process.exit(1)});`
 	const pythonProgram = `import socket,sys
 s=socket.socket();s.settimeout(1)
 try:
  s.connect(("1.1.1.1",443));sys.exit(2)
 except OSError as e:
- sys.exit(0 if e.errno == 101 else 1)`
+ print(e.errno, file=sys.stderr);sys.exit(0 if e.errno == 101 else 1)`
 	path := "/usr/bin/node"
 	program := nodeProgram
 	if runtime == "python3" {
 		path = "/usr/bin/python3"
 		program = pythonProgram
 	}
-	command := exec.Command(path, "-c", program)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, path, "-c", program)
 	command.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/tmp"}
-	if err := command.Start(); err != nil {
-		return "", err
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return "network-unreachable", nil
 	}
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	select {
-	case err := <-done:
-		if err == nil {
-			return "network-unreachable", nil
-		}
-		return "", fmt.Errorf("runtime did not receive ENETUNREACH: %w", err)
-	case <-time.After(2 * time.Second):
-		_ = command.Process.Kill()
-		<-done
+	if ctx.Err() != nil {
 		return "", fmt.Errorf("network probe timed out")
 	}
+	return "", fmt.Errorf("runtime did not receive ENETUNREACH: %w (%s)", err, strings.TrimSpace(string(output)))
 }
 
 // INV-1 uses a separately generated AWS-access-key-shaped canary. Scanning
