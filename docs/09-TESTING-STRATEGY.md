@@ -20,7 +20,9 @@ those tests. CI runs Linux with Vitest's default pool and must report its normal
 summary; this local workaround does not weaken CI coverage.
 
 Native Windows cannot bind the Unix-domain sockets exercised by the container
-driver mechanism test and INV-7. Run `pnpm test:wsl2` from WSL2 for that pair.
+driver mechanism test, INV-7, and the guest agent socket client. Run `pnpm test:wsl2`
+from WSL2 for those tests. It also includes the Firecracker runtime tests when their
+explicit KVM environment variables are set.
 This is an explicit platform split, not a skipped security check. Set
 `CAISSON_INV7_FIRECRACKER=1` with the documented Firecracker inputs in a
 KVM-capable WSL2/Linux environment to run INV-7's Firecracker case.

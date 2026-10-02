@@ -22,7 +22,7 @@
     "policy:test": "node scripts/test-policy.mjs",
     "test": "pnpm test:invariant-lint && turbo run test && vitest run tests",
     "test:invariant-lint": "node scripts/check-invariant-tests.mjs",
-    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/invariants/INV-1.spec.ts tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts tests/isolation/firecracker-runtime.integration.spec.ts tests/guest/runtime-rootfs-inventory.spec.ts",
+    "test:wsl2": "pnpm exec vitest run --pool=threads --reporter=verbose tests/agent-runtime/local-tool-client.spec.ts tests/invariants/INV-1.spec.ts tests/invariants/INV-7.spec.ts tests/isolation/m1-driver-mechanism.spec.ts tests/isolation/firecracker-runtime.integration.spec.ts tests/isolation/firecracker-agent-runtime.integration.spec.ts tests/guest/runtime-rootfs-inventory.spec.ts tests/guest/agent-runtime-rootfs-inventory.spec.ts",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
