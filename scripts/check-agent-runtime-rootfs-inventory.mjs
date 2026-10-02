@@ -6,7 +6,8 @@ const rootfs = process.argv[2];
 const printOnly = process.argv[3] === "--print";
 const writeLock = process.argv[3] === "--write-lock";
 const printRuntimeArtifacts = process.argv[3] === "--print-runtime-artifacts";
-if (rootfs === undefined) throw new Error("usage: check-agent-runtime-rootfs-inventory.mjs <rootfs> [--print]");
+if (rootfs === undefined)
+  throw new Error("usage: check-agent-runtime-rootfs-inventory.mjs <rootfs> [--print]");
 if (basename(rootfs) !== "caisson-agent-runtime-rootfs.ext4")
   throw new Error("inventory only accepts the production M-3 agent runtime rootfs");
 

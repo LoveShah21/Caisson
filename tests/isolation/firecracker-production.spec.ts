@@ -67,7 +67,10 @@ describe("Firecracker M-1 development probe boundary", () => {
     });
     try {
       await expect(
-        driver.prepare({ id: "agent-diagnostic-refusal", image: "agent-diagnostic" }, transportHost),
+        driver.prepare(
+          { id: "agent-diagnostic-refusal", image: "agent-diagnostic" },
+          transportHost,
+        ),
       ).rejects.toThrow("production refuses an ineligible development or diagnostic rootfs");
     } finally {
       if (previous === undefined) delete process.env.CAISSON_ENV;

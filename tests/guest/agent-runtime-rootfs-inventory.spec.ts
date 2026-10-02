@@ -17,16 +17,30 @@ describe("M-3 agent runtime rootfs inventory", () => {
       const directory = await mkdtemp(join(tmpdir(), "caisson-agent-runtime-rootfs-"));
       const rootfs = join(directory, "caisson-agent-runtime-rootfs.ext4");
       try {
-        const output = execFileSync("bash", ["guest/rootfs/build-agent-runtime-rootfs.sh", rootfs], {
-          encoding: "utf8",
-          env: process.env,
-        });
-        expect(output).toContain("PASS agent runtime rootfs");
-        expect(output).toContain("PASS agent runtime rootfs inventory and runtime artifact allowlist");
-        expect(
-          execFileSync("node", ["scripts/check-agent-runtime-rootfs-inventory.mjs", rootfs, "--print-runtime-artifacts"], {
+        const output = execFileSync(
+          "bash",
+          ["guest/rootfs/build-agent-runtime-rootfs.sh", rootfs],
+          {
             encoding: "utf8",
-          }),
+            env: process.env,
+          },
+        );
+        expect(output).toContain("PASS agent runtime rootfs");
+        expect(output).toContain(
+          "PASS agent runtime rootfs inventory and runtime artifact allowlist",
+        );
+        expect(
+          execFileSync(
+            "node",
+            [
+              "scripts/check-agent-runtime-rootfs-inventory.mjs",
+              rootfs,
+              "--print-runtime-artifacts",
+            ],
+            {
+              encoding: "utf8",
+            },
+          ),
         ).toBe("/run/caisson/agent.sock\n");
         const unexpected = join(directory, "unexpected");
         await writeFile(unexpected, "must not be in the agent rootfs");
