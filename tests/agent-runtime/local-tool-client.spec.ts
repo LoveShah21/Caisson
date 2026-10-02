@@ -93,6 +93,7 @@ describe("LocalToolClient", () => {
         );
       });
     });
+    server.listen(socketPath);
     await waitForListening(server);
     const client = new LocalToolClient({ socketPath, timeoutMs: 1_000 });
     await expect(
