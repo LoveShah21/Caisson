@@ -498,19 +498,15 @@ func executeProcess(raw json.RawMessage) (any, *localExecutionError) {
 }
 
 func runAllowed(command string, args []string, cwd string, timeoutMS int) (string, string, int, bool, bool, error) {
-	path, allowed := executablePaths[command]
-	if !allowed || strings.Contains(command, "/") || (command == "git" && !allowedGit(args)) {
-		return "", "", -1, false, false, fmt.Errorf("binary not allowed")
-	}
-	info, err := os.Stat(path)
-	if err != nil || executableInodes[path] == 0 || inode(info) != executableInodes[path] {
-		return "", "", -1, false, false, fmt.Errorf("allowlisted binary changed")
+	path, err := allowedExecutable(command, args)
+	if err != nil {
+		return "", "", -1, false, false, err
 	}
 	executionContext, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
 	defer cancel()
 	commandProcess := exec.CommandContext(executionContext, path, args...)
 	commandProcess.Dir = cwd
-	commandProcess.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspace", "LANG=C.UTF-8"}
+	commandProcess.Env = sanitizedChildEnv()
 	commandProcess.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: agentUID, Gid: agentGID}}
 	stdout := cappedBuffer{limit: 2 * 1024 * 1024}
 	stderr := cappedBuffer{limit: 2 * 1024 * 1024}
@@ -527,6 +523,22 @@ func runAllowed(command string, args []string, cwd string, timeoutMS int) (strin
 		return stdout.String(), stderr.String(), exit.ExitCode(), false, stdout.truncated || stderr.truncated, err
 	}
 	return stdout.String(), stderr.String(), -1, false, stdout.truncated || stderr.truncated, err
+}
+
+func allowedExecutable(command string, args []string) (string, error) {
+	path, allowed := executablePaths[command]
+	if !allowed || strings.Contains(command, "/") || (command == "git" && !allowedGit(args)) {
+		return "", fmt.Errorf("binary not allowed")
+	}
+	info, err := os.Stat(path)
+	if err != nil || executableInodes[path] == 0 || inode(info) != executableInodes[path] {
+		return "", fmt.Errorf("allowlisted binary changed")
+	}
+	return path, nil
+}
+
+func sanitizedChildEnv() []string {
+	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspace", "LANG=C.UTF-8"}
 }
 
 // Capping guest process output prevents a local operation from consuming the
