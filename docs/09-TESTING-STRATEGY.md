@@ -27,6 +27,11 @@ This is an explicit platform split, not a skipped security check. Set
 `CAISSON_INV7_FIRECRACKER=1` with the documented Firecracker inputs in a
 KVM-capable WSL2/Linux environment to run INV-7's Firecracker case.
 
+`test:wsl2` runs its selected files with file parallelism disabled. A WSL2
+machine may expose one practical KVM capacity, and concurrent Firecracker
+snapshot tests can time out at the Firecracker API rather than test the
+property under review. The suite remains complete; it is serialized.
+
 ## 2. The mocking rule
 
 You may mock an external service. You may never mock the policy engine, the secret backend, the audit writer, the transport binding, or the isolation driver in a test that asserts an invariant. Mocking a control in the test that proves the control works is how security test suites become decorative.
