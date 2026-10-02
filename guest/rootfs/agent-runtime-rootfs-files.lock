@@ -15,6 +15,7 @@
 040755	/lib/sysctl.d
 040700	/lost+found
 040555	/proc
+040755	/run
 040755	/tmp
 040755	/usr
 040755	/usr/bin
@@ -1748,3 +1749,4 @@
 120777	/usr/sbin/setfont
 120777	/usr/sbin/setlogcons
 100755	/usr/sbin/update-ca-certificates
+040755	/workspace

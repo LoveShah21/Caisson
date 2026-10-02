@@ -194,6 +194,12 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  apps/agent-runtime:
+    dependencies:
+      '@caisson/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   apps/broker:
     dependencies:
       '@aws-sdk/client-s3':

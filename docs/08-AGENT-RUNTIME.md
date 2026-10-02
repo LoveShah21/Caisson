@@ -20,6 +20,12 @@ There is no HTTP client in the guest. There is no shell. There is no package ins
 
 This table defines guest-side agent tools only. It does not govern `IsolationDriver.exec`, which is a separate infrastructure-only lifecycle primitive defined in `05-API-CONTRACTS.md`; it is never reachable from an agent, broker request, or guest-to-broker frame.
 
+The agent process is separate from the guest runtime. It reaches the runtime only over
+`/run/caisson/agent.sock`, an owner-only Unix-domain socket created by the runtime
+after entropy readiness. It has no vsock or broker endpoint of its own. The socket
+uses the existing framed `broker.call` and local-tool schemas in `05-API-CONTRACTS.md`;
+it is a local transport for those shapes, not an HTTP API or a second broker.
+
 ### exec allowlist (v1)
 
 `rg`, `jq`, `git` (fetch, clone, log, diff, status only, enforced by subcommand check), `node` (restricted to the workspace, no network), `python3` (same), `cat`, `ls`, `head`, `tail`, `wc`, `sort`, `uniq`, `diff`.

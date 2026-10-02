@@ -63,7 +63,7 @@ The choke point. One process per sandbox host. Holds a vsock listener, an adapte
 `IsolationDriver` plus `FirecrackerDriver` and `ContainerDriver`. Firecracker is driven directly over its REST API on a unix socket; no third-party SDK is needed for the small surface used here. Its stdin is detached from the controlling terminal and stdout and stderr are written to a per-sandbox host log file. It reports a guest ready only after the M-1 infrastructure probe completes a host-initiated vsock command round trip. See ADR-4.
 
 ### Agent runtime (`apps/agent-runtime`)
-Runs in the guest. Seven tools, a skill loader, a structured error handler, and a vsock client. All seven tool operations cross vsock and are audited outside the guest. It has no HTTP client and no shell.
+Runs in the guest as a separate agent process. It reaches the privileged guest runtime only through the owner-only `/run/caisson/agent.sock` Unix socket. The runtime, not the agent, owns the vsock client: it relays `broker.call` to port 1024 and the authorized local-tool exchange to port 1027. All seven operations are audited outside the guest. The agent has no HTTP client, shell, token, credential, or direct host transport.
 
 ### Interceptor
 Transparent proxy on the host for destinations that cannot be brokered. mitmproxy in v1, eBPF as a stretch replacement. See ADR-6.
@@ -77,7 +77,7 @@ Next.js. Subscribes to the websocket hub, renders pending requests in human-read
 ## 4. Request path for a brokered action
 
 1. Control plane calls `prepare()`. The driver allocates a host-only descriptor and asks the broker-owned `transportHost` for a runtime attachment. The container attachment is an owner-only Unix listener created by the broker. The Firecracker attachment is a random private UDS path reserved by the broker and bound by the trusted Firecracker process. The control plane persists the descriptor, never the attachment path, then calls `start()`. A persistence failure destroys the prepared sandbox before `transportHost.release()` removes the attachment. Snapshot restore follows the same prepare, persist, start order with a new attachment.
-2. Agent calls the `broker` tool.
+2. Agent calls the runtime over its owner-only guest-local Unix socket.
 3. Runtime writes a framed request to vsock or the container's mounted Unix socket. Frames use the bounded protocol in `05-API-CONTRACTS.md`: UInt32BE payload length followed by UTF-8 JSON, maximum 16 MiB. The broker validates configured adapter caps against that maximum during startup.
 4. Broker resolves the session from the connection binding. Not from the payload.
 5. Broker checks token validity and loads the scope set from Postgres.

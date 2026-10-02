@@ -16,6 +16,7 @@ import (
 
 const brokerPort = 1024
 const entropyPort = 1025
+const runtimeFrameMaxBytes = 16 * 1024 * 1024
 const hostCID = 2
 const afVsock = 40
 const vmaddrCIDAny = 0xffffffff
@@ -32,14 +33,27 @@ func main() {
 	if err := mountFilesystems(); err != nil {
 		fail("dev setup failed")
 	}
-	request, err := bootRequest()
-	if err != nil {
-		fail("broker request missing or invalid")
-	}
 	entropyReady := make(chan error, 1)
 	go serveEntropyControl(entropyReady)
 	if err := <-entropyReady; err != nil {
 		fail("entropy control failed")
+	}
+	if agentRuntimeBuild {
+		if diagnosticRuntimeBuild {
+			go func() {
+				if err := serveDiagnostics(); err != nil {
+					fail("diagnostic control failed")
+				}
+			}()
+		}
+		if err := serveAgentSocket(); err != nil {
+			fail("agent socket failed")
+		}
+		return
+	}
+	request, err := bootRequest()
+	if err != nil {
+		fail("broker request missing or invalid")
 	}
 	if diagnosticRuntimeBuild && diagnosticPreflightEnabled() {
 		listenerReady := make(chan error, 1)
@@ -232,6 +246,14 @@ func mixEntropy(connection int) error {
 func mountFilesystems() error {
 	if err := syscall.Mount("proc", "/proc", "proc", 0, ""); err != nil {
 		return fmt.Errorf("mount proc: %w", err)
+	}
+	if agentRuntimeBuild {
+		if err := syscall.Mount("tmpfs", "/run", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=0755,size=1m"); err != nil {
+			return fmt.Errorf("mount run: %w", err)
+		}
+		if err := syscall.Mount("tmpfs", "/workspace", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=0700,size=64m"); err != nil {
+			return fmt.Errorf("mount workspace: %w", err)
+		}
 	}
 	return nil
 }

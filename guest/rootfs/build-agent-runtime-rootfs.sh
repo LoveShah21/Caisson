@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 output=${1:-"$root/caisson-agent-runtime-rootfs.ext4"}
-build_tags=${CAISSON_AGENT_RUNTIME_BUILD_TAGS:-}
+build_tags=${CAISSON_AGENT_RUNTIME_BUILD_TAGS:-agent}
 work=${TMPDIR:-/tmp}/caisson-agent-runtime-rootfs-$$
 trap 'rm -rf "$work"' EXIT
 
@@ -62,7 +62,7 @@ rm -rf "$work/staging/etc" "$work/staging/home" "$work/staging/media" "$work/sta
   "$work/staging/opt" "$work/staging/root" "$work/staging/run" "$work/staging/sbin" \
   "$work/staging/srv" "$work/staging/sys" "$work/staging/var" "$work/staging/lib/apk" \
   "$work/staging/usr/include" "$work/staging/usr/share"
-mkdir -p "$work/staging/bin" "$work/staging/dev" "$work/staging/proc" "$work/staging/tmp" \
+mkdir -p "$work/staging/bin" "$work/staging/dev" "$work/staging/proc" "$work/staging/run" "$work/staging/tmp" "$work/staging/workspace" \
   "$work/staging/usr/bin" "$work/staging/usr/local/bin"
 find "$work/staging/bin" -mindepth 1 ! -name busybox -exec rm -rf {} +
 find "$work/staging/usr/bin" -mindepth 1 \

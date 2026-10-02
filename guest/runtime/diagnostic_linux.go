@@ -163,6 +163,22 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 		writeDiagnostic(fd, diagnosticResponse{Error: fmt.Sprintf("network probe %s failed: %v", request.Value, err)})
 		return
 	}
+	if request.Operation == "agent_tool" && request.Path == "" && len(request.Value) > 0 && len(request.Value) <= runtimeFrameMaxBytes {
+		value, err := diagnosticAgentTool(request.Value)
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
+			return
+		}
+		writeDiagnostic(fd, diagnosticResponse{Error: "agent tool diagnostic failed"})
+		return
+	}
+	if request.Operation == "agent_socket_stat" && request.Path == "" && request.Value == "" {
+		value, err := diagnosticAgentSocketState()
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
+			return
+		}
+	}
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})
 }
 

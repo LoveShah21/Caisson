@@ -181,7 +181,8 @@ Every request is `{ id, op, body }`, where `id` is at most 128 UTF-8 bytes. Unkn
 
 #### Local-tool authorization exchange
 
-The existing broker transport accepts one frame and closes. Local tools add a stateful, one-operation connection with exactly this sequence:
+`broker.call` uses the existing host vsock port `1024`. Local tools use host vsock
+port `1027`, then add a stateful, one-operation connection with exactly this sequence:
 
 ```text
 guest -> host: { id, op: fs.* | proc.exec | user.ask, body }

@@ -5,6 +5,7 @@ import { basename, resolve } from "node:path";
 const rootfs = process.argv[2];
 const printOnly = process.argv[3] === "--print";
 const writeLock = process.argv[3] === "--write-lock";
+const printRuntimeArtifacts = process.argv[3] === "--print-runtime-artifacts";
 if (rootfs === undefined) throw new Error("usage: check-agent-runtime-rootfs-inventory.mjs <rootfs> [--print]");
 if (basename(rootfs) !== "caisson-agent-runtime-rootfs.ext4")
   throw new Error("inventory only accepts the production M-3 agent runtime rootfs");
@@ -39,6 +40,22 @@ if (printOnly) {
   process.exit(0);
 }
 
+const runtimeArtifactsPath = resolve("guest/rootfs/agent-runtime-runtime-artifacts.lock");
+const expectedRuntimeArtifacts = (await readFile(runtimeArtifactsPath, "utf8"))
+  .split(/\r?\n/u)
+  .map((value) => value.trim())
+  .filter((value) => value !== "" && !value.startsWith("#"));
+if (
+  expectedRuntimeArtifacts.length !== 1 ||
+  expectedRuntimeArtifacts[0] !== "/run/caisson/agent.sock"
+) {
+  throw new Error("agent runtime artifact allowlist must contain only /run/caisson/agent.sock");
+}
+if (printRuntimeArtifacts) {
+  process.stdout.write(`${expectedRuntimeArtifacts.join("\n")}\n`);
+  process.exit(0);
+}
+
 const lockPath = resolve("guest/rootfs/agent-runtime-rootfs-files.lock");
 if (writeLock) {
   await writeFile(lockPath, `${rendered}\n`, "utf8");
@@ -51,4 +68,4 @@ if (rendered !== expectedRendered) {
     "agent runtime rootfs inventory differs from the checked-in allowlist; regenerate only after reviewing every file and dependency",
   );
 }
-process.stdout.write("PASS agent runtime rootfs inventory\n");
+process.stdout.write("PASS agent runtime rootfs inventory and runtime artifact allowlist\n");
