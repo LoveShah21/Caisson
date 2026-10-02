@@ -216,6 +216,17 @@ describe("Firecracker M-3 agent runtime", () => {
           ok: true,
           body: { result: { stdout: "hello guest runtime" } },
         });
+        const forbiddenProcess = await invoke(host, prepared, {
+          id: "agent-exec-shell",
+          op: "proc.exec",
+          body: { argv: ["sh", "-c", "touch /workspace/should-not-exist"] },
+        });
+        // This denial is emitted by LocalToolPipeline before the runtime can
+        // execute argv. It proves the host does not trust a guest report.
+        expect(forbiddenProcess).toMatchObject({
+          ok: false,
+          error: { code: "BINARY_NOT_ALLOWED" },
+        });
         const ask = await invoke(host, prepared, {
           id: "agent-ask",
           op: "user.ask",
@@ -241,24 +252,30 @@ describe("Firecracker M-3 agent runtime", () => {
           containsSecretShape([write, read, edit, search, processResult, ask, brokerResult]),
         ).toBe(false);
         await audit.drainPending();
-        const rows = await clickhouse.query(
-          `SELECT method, event_type FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
-        );
-        for (const method of [
-          "fs.write",
-          "fs.read",
-          "fs.edit",
-          "fs.search",
-          "proc.exec",
-          "user.ask",
-          "query",
-        ]) {
-          expect(rows).toContain(`"method":"${method}"`);
+        const rows = (
+          await clickhouse.query(
+            `SELECT method, event_type FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
+          )
+        )
+          .trim()
+          .split("\n")
+          .filter((row) => row !== "")
+          .map((row) => JSON.parse(row) as { method: string; event_type: string });
+        for (const [method, terminal] of [
+          ["fs.write", "action.completed"],
+          ["fs.read", "action.completed"],
+          ["fs.edit", "action.completed"],
+          ["fs.search", "action.completed"],
+          ["proc.exec", "action.completed"],
+          ["user.ask", "action.failed"],
+          ["query", "action.completed"],
+        ] as const) {
+          expect(rows).toContainEqual({ method, event_type: "action.started" });
+          expect(rows).toContainEqual({ method, event_type: terminal });
         }
-        expect(rows).toContain('"event_type":"action.started"');
-        expect(rows).toContain('"event_type":"action.completed"');
-        expect(rows).toContain('"event_type":"action.failed"');
-        expect(rows).not.toContain(credentialCanary);
+        expect(rows).toContainEqual({ method: "proc.exec", event_type: "action.denied" });
+        const serializedRows = JSON.stringify(rows);
+        expect(serializedRows).not.toContain(credentialCanary);
       } finally {
         await driver.destroy(prepared.handle);
         await host.release(prepared.transport);

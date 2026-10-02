@@ -75,9 +75,31 @@ export class LocalToolPipeline {
       const startedAt = performance.now();
       const identity = await this.#identities.resolve(peer);
       const scopeUsed = scopeFor(request.op);
-      if (request.op === "proc.exec") assertAllowedExec(request.body.argv);
-
       const bundle = await this.#policyBundles.load(identity.policyBundleId);
+      const actionId = randomUUID();
+      if (request.op === "proc.exec") {
+        try {
+          assertAllowedExec(request.body.argv);
+        } catch (error) {
+          const caisson = asCaissonError(error);
+          await this.#audit.persistDurably(
+            auditEvent({
+              identity,
+              actionId,
+              request,
+              eventType: "action.denied",
+              decision: "deny",
+              policyBundleId: bundle.id,
+              policyReason: caisson.message,
+              scopeUsed,
+              durationMs: elapsed(startedAt),
+              errorCode: caisson.code,
+              errorMessage: caisson.message,
+            }),
+          );
+          throw caisson;
+        }
+      }
       const decision = bundle.evaluator.evaluate({
         session: {
           id: identity.sessionId,
@@ -98,7 +120,6 @@ export class LocalToolPipeline {
         },
         context: { now: new Date().toISOString(), hardwareIsolated: identity.hardwareIsolated },
       });
-      const actionId = randomUUID();
       if (decision.decision !== "allow") {
         await this.#audit.persistDurably(
           auditEvent({
@@ -357,6 +378,11 @@ function previewFor(
 
 function auditSafeErrorMessage(message: string): string {
   return containsSecretShape(message) ? "guest reported a redacted failure" : message;
+}
+
+function asCaissonError(error: unknown): CaissonError {
+  if (error instanceof CaissonError) return error;
+  return new CaissonError("BINARY_NOT_ALLOWED", "executable is not allowlisted");
 }
 
 function assertPositive(value: number, name: string): void {
