@@ -41,9 +41,7 @@ decision := {
 }
 
 session_expired if {
-  input.session.expiresAt != ""
-  input.context.now != ""
-  time.parse_rfc3339_ns(input.context.now) >= time.parse_rfc3339_ns(input.session.expiresAt)
+  object.get(input.session, "validAtEvaluation", true) == false
 }
 
 method_rate_exceeded if {

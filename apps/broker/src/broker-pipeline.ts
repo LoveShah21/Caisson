@@ -100,6 +100,7 @@ export class BrokerPipeline {
       span.setAttribute(ATTRIBUTE_KEYS.scopeUsed, scopeUsed);
 
       const bundle = await this.#policyBundles.load(identity.policyBundleId);
+      const now = new Date();
       const decision = bundle.evaluator.evaluate({
         session: {
           id: identity.sessionId,
@@ -107,6 +108,7 @@ export class BrokerPipeline {
           scopes: identity.scopes,
           approvalMode: identity.approvalMode,
           expiresAt: identity.expiresAt.toISOString(),
+          validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
           requestedBy: identity.requestedBy,
           purpose: identity.purpose,
         },
@@ -118,7 +120,7 @@ export class BrokerPipeline {
           params: params.data,
         },
         context: {
-          now: new Date().toISOString(),
+          now: now.toISOString(),
           hardwareIsolated: identity.hardwareIsolated,
           actionCountThisMethod: 0,
         },

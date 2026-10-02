@@ -20,7 +20,7 @@ test_scope_allows if {
 
 test_expired_session_denies if {
   result := decision with input as {
-    "session": {"scopes": ["warehouse.readonly"], "expiresAt": "2026-01-01T00:00:00Z"},
+    "session": {"scopes": ["warehouse.readonly"], "expiresAt": "2026-01-01T00:00:00Z", "validAtEvaluation": false},
     "action": {"scopeRequired": "warehouse.readonly"},
     "context": {"now": "2026-01-02T00:00:00Z", "actionCountThisMethod": 0},
   }

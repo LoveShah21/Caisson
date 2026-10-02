@@ -19,6 +19,7 @@ Rego compiled to wasm, evaluated in-process in the broker via `@open-policy-agen
     "approvalMode": "rule",
     "validFrom": "2026-09-21T09:00:00Z",
     "expiresAt": "2026-09-21T09:30:00Z",
+    "validAtEvaluation": true,
     "requestedBy": "love@example.com",
     "purpose": "Investigate failed checkouts",
     "metadata": { "ticket": "INC-2291" }
@@ -41,7 +42,7 @@ Rego compiled to wasm, evaluated in-process in the broker via `@open-policy-agen
 }
 ```
 
-The broker computes `action.parsed` before evaluation. Rego must never parse SQL, URLs, or diffs itself; structured facts are the broker's job, decisions are Rego's job.
+The broker computes `action.parsed` and the current validity-window fact before evaluation. Rego must never parse SQL, URLs, or diffs itself; structured facts are the broker's job, decisions are Rego's job. `session.validAtEvaluation` is derived from host time and the bound session expiry, never from a guest frame.
 
 ## 4. Output document
 
