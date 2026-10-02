@@ -328,6 +328,14 @@ describe("Firecracker M-3 agent runtime", () => {
             (row) => row.method === "fs.read" && row.event_type === "action.invalid_completion",
           ),
         ).toBe(true);
+        const invalidCompletionAudit = rows.find(
+          (row) => row.method === "fs.read" && row.event_type === "action.invalid_completion",
+        );
+        expect(invalidCompletionAudit).toMatchObject({
+          params_preview: "",
+          result_bytes: 0,
+          result_hash: "0".repeat(64),
+        });
         const truncatedAudit = rows.find(
           (row) =>
             row.method === "fs.read" &&
@@ -335,6 +343,7 @@ describe("Firecracker M-3 agent runtime", () => {
             row.result_bytes > 128,
         );
         expect(truncatedAudit).toMatchObject({
+          result_bytes: Buffer.byteLength(JSON.stringify({ value: "x".repeat(4096) }), "utf8"),
           result_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
         });
         expect(Buffer.byteLength(truncatedAudit?.params_preview ?? "", "utf8")).toBeLessThanOrEqual(
