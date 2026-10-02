@@ -117,7 +117,11 @@ export class BrokerPipeline {
           scopeRequired: scopeUsed,
           params: params.data,
         },
-        context: { now: new Date().toISOString(), hardwareIsolated: identity.hardwareIsolated },
+        context: {
+          now: new Date().toISOString(),
+          hardwareIsolated: identity.hardwareIsolated,
+          actionCountThisMethod: 0,
+        },
       });
       span.setAttribute(ATTRIBUTE_KEYS.decision, decision.decision);
       const obligationContext = resolveObligations(decision.obligations);

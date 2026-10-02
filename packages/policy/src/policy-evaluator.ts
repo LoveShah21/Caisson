@@ -8,6 +8,7 @@ const PolicyResultSchema = z
     decision: PolicyDecisionSchema,
     reason: z.string().min(1).max(512),
     obligations: z.array(z.string().min(1).max(128)).max(32),
+    matchedRules: z.array(z.string().min(1).max(128)).min(1).max(32),
   })
   .strict();
 
@@ -15,6 +16,7 @@ export interface PolicyDecisionResult {
   readonly decision: PolicyDecision;
   readonly reason: string;
   readonly obligations: readonly string[];
+  readonly matchedRules: readonly string[];
 }
 
 export interface LoadedPolicyBundle {

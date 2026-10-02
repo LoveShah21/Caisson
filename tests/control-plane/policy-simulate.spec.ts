@@ -33,7 +33,10 @@ describe("POST /v1/policy/simulate", () => {
         },
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({ decision: "allow" });
+      expect(response.json()).toMatchObject({
+        decision: "allow",
+        matchedRules: ["scope_required"],
+      });
       const [audit] = await postgres.sql<
         {
           input_hash: string;
