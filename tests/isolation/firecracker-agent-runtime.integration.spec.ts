@@ -229,6 +229,33 @@ describe("Firecracker M-3 agent runtime", () => {
           ok: false,
           error: { code: "BINARY_NOT_ALLOWED" },
         });
+        for (const [id, argv] of [
+          ["agent-exec-git-push", ["git", "push"]],
+          ["agent-exec-workspace", ["/workspace/uploaded", "--version"]],
+          ["agent-exec-path", ["PATH=/workspace", "cat", "/workspace/note.txt"]],
+          ["agent-exec-preload", ["LD_PRELOAD=/workspace/libevil.so", "cat"]],
+        ] as const) {
+          const denied = await invoke(host, prepared, {
+            id,
+            op: "proc.exec",
+            body: { argv },
+          });
+          expect(denied).toMatchObject({ ok: false, error: { code: "BINARY_NOT_ALLOWED" } });
+        }
+        // The semicolon is an argv element, not a command separator. `cat`
+        // reports missing literal files; it must never create the marker.
+        const metacharacters = await invoke(host, prepared, {
+          id: "agent-exec-metacharacters",
+          op: "proc.exec",
+          body: { argv: ["cat", ";touch", "/workspace/inv8-marker"] },
+        });
+        expect(metacharacters).toMatchObject({ ok: true, body: { result: { exitCode: 1 } } });
+        const marker = await invoke(host, prepared, {
+          id: "agent-read-metacharacter-marker",
+          op: "fs.read",
+          body: { path: "/workspace/inv8-marker" },
+        });
+        expect(marker).toMatchObject({ ok: false });
         const ask = await invoke(host, prepared, {
           id: "agent-ask",
           op: "user.ask",

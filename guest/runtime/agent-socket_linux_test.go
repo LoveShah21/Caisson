@@ -24,6 +24,11 @@ func TestRunAllowedRejectsDisallowedBinaryAndGitSubcommand(t *testing.T) {
 
 func TestRunAllowedUsesFixedSanitizedEnvironment(t *testing.T) {
 	withTestExecutables(t, map[string]string{"cat": "/bin/echo"})
+	t.Setenv("LD_PRELOAD", "/tmp/attacker.so")
+	t.Setenv("LD_LIBRARY_PATH", "/tmp")
+	t.Setenv("NODE_OPTIONS", "--require /tmp/attacker.js")
+	t.Setenv("PYTHONSTARTUP", "/tmp/attacker.py")
+	t.Setenv("PATH", "/workspace")
 	environment := strings.Join(sanitizedChildEnv(), "\n")
 	if strings.Contains(environment, "LD_PRELOAD=") || strings.Contains(environment, "LD_LIBRARY_PATH=") ||
 		strings.Contains(environment, "NODE_OPTIONS=") || strings.Contains(environment, "PYTHONSTARTUP=") {
