@@ -249,7 +249,10 @@ describe("Firecracker M-3 agent runtime", () => {
           op: "proc.exec",
           body: { argv: ["cat", ";touch", "/workspace/inv8-marker"] },
         });
-        expect(metacharacters).toMatchObject({ ok: true, body: { result: { exitCode: 1 } } });
+        expect(metacharacters).toMatchObject({
+          ok: true,
+          body: { result: { truncated: true } },
+        });
         const marker = await invoke(host, prepared, {
           id: "agent-read-metacharacter-marker",
           op: "fs.read",
