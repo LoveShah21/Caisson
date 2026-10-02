@@ -40,7 +40,13 @@ func TestAllowedExecutableRejectsChangedSymlink(t *testing.T) {
 	if err := os.Symlink("/usr/bin/env", link); err != nil {
 		t.Fatal(err)
 	}
-	executablePaths["cat"] = link
+	originalPaths := executablePaths
+	originalInodes := executableInodes
+	executablePaths = map[string]string{"cat": link}
+	t.Cleanup(func() {
+		executablePaths = originalPaths
+		executableInodes = originalInodes
+	})
 	if err := captureExecutableInodes(); err != nil {
 		t.Fatal(err)
 	}
