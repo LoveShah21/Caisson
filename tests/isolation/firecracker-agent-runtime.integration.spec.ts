@@ -120,8 +120,10 @@ describe("Firecracker M-3 agent runtime", () => {
       identities,
       policyBundles,
       audit,
-      resultMaxBytes: 1_024 * 1_024,
-      previewMaxBytes: 4_096,
+      // Deliberately small so the diagnostic completion test proves the host,
+      // not the guest, derives a bounded response and audit metadata.
+      resultMaxBytes: 128,
+      previewMaxBytes: 64,
     });
   }, 90_000);
 
@@ -131,14 +133,14 @@ describe("Firecracker M-3 agent runtime", () => {
   });
 
   it.skipIf(!kvmEnabled)(
-    "authorizes and audits all seven tools through the agent socket and real host vsock listeners",
+    "authorizes, audits, and fails closed for all seven tools through real host vsock listeners",
     async () => {
       const host = new FirecrackerBrokerTransportHost({
         pipeline: broker,
         runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         localTools: {
           frameReadTimeoutMs: 5_000,
-          completionTimeoutMs: 30_000,
+          completionTimeoutMs: 100,
           pipeline: localTools,
         },
       });
@@ -251,16 +253,54 @@ describe("Firecracker M-3 agent runtime", () => {
         expect(
           containsSecretShape([write, read, edit, search, processResult, ask, brokerResult]),
         ).toBe(false);
+        await expect(
+          waitForDiagnostic(host.endpointFor(prepared.transport), {
+            operation: "agent_fault",
+            value: "abandon",
+          }),
+        ).resolves.toMatchObject({ value: "authorized" });
+        const invalidCompletion = await waitForDiagnostic(host.endpointFor(prepared.transport), {
+          operation: "agent_fault",
+          value: "invalid_completion",
+        });
+        expect(JSON.parse(invalidCompletion.value ?? "")).toMatchObject({
+          ok: false,
+          error: { code: "PARAMS_INVALID" },
+        });
+        const oversized = await waitForDiagnostic(host.endpointFor(prepared.transport), {
+          operation: "agent_fault",
+          value: "oversized",
+        });
+        const oversizedResponse = JSON.parse(oversized.value ?? "") as {
+          body?: {
+            result?: { truncated?: boolean; preview?: string };
+            meta?: { truncated?: boolean };
+          };
+        };
+        expect(oversizedResponse).toMatchObject({
+          ok: true,
+          body: { result: { truncated: true }, meta: { truncated: true } },
+        });
+        expect(oversizedResponse.body?.result?.preview).toHaveLength(128);
         await audit.drainPending();
         const rows = (
           await clickhouse.query(
-            `SELECT method, event_type FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
+            `SELECT method, event_type, result_bytes, result_hash, params_preview FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
           )
         )
           .trim()
           .split("\n")
           .filter((row) => row !== "")
-          .map((row) => JSON.parse(row) as { method: string; event_type: string });
+          .map(
+            (row) =>
+              JSON.parse(row) as {
+                method: string;
+                event_type: string;
+                result_bytes: number;
+                result_hash: string;
+                params_preview: string;
+              },
+          );
         for (const [method, terminal] of [
           ["fs.write", "action.completed"],
           ["fs.read", "action.completed"],
@@ -270,10 +310,36 @@ describe("Firecracker M-3 agent runtime", () => {
           ["user.ask", "action.failed"],
           ["query", "action.completed"],
         ] as const) {
-          expect(rows).toContainEqual({ method, event_type: "action.started" });
-          expect(rows).toContainEqual({ method, event_type: terminal });
+          expect(
+            rows.some((row) => row.method === method && row.event_type === "action.started"),
+          ).toBe(true);
+          expect(rows.some((row) => row.method === method && row.event_type === terminal)).toBe(
+            true,
+          );
         }
-        expect(rows).toContainEqual({ method: "proc.exec", event_type: "action.denied" });
+        expect(
+          rows.some((row) => row.method === "proc.exec" && row.event_type === "action.denied"),
+        ).toBe(true);
+        expect(
+          rows.some((row) => row.method === "fs.read" && row.event_type === "action.abandoned"),
+        ).toBe(true);
+        expect(
+          rows.some(
+            (row) => row.method === "fs.read" && row.event_type === "action.invalid_completion",
+          ),
+        ).toBe(true);
+        const truncatedAudit = rows.find(
+          (row) =>
+            row.method === "fs.read" &&
+            row.event_type === "action.completed" &&
+            row.result_bytes > 128,
+        );
+        expect(truncatedAudit).toMatchObject({
+          result_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
+        expect(Buffer.byteLength(truncatedAudit?.params_preview ?? "", "utf8")).toBeLessThanOrEqual(
+          64,
+        );
         const serializedRows = JSON.stringify(rows);
         expect(serializedRows).not.toContain(credentialCanary);
       } finally {
@@ -302,7 +368,11 @@ async function waitForDiagnostic(
   endpointPath: string,
   request:
     | { readonly operation: "agent_tool"; readonly value: string }
-    | { readonly operation: "agent_socket_stat" },
+    | { readonly operation: "agent_socket_stat" }
+    | {
+        readonly operation: "agent_fault";
+        readonly value: "abandon" | "invalid_completion" | "oversized";
+      },
 ) {
   let lastError: unknown;
   for (let attempt = 0; attempt < 100; attempt += 1) {

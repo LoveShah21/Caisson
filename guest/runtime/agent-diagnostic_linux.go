@@ -3,9 +3,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -23,6 +25,60 @@ func diagnosticAgentTool(request string) (string, error) {
 		return "", err
 	}
 	if err := writeFrame(connection, []byte(request)); err != nil {
+		return "", err
+	}
+	response, err := readFrame(connection)
+	if err != nil {
+		return "", err
+	}
+	return string(response), nil
+}
+
+// diagnosticAgentFault exercises only the host-side local-tool state machine.
+// It is compiled exclusively into the ineligible diagnostic rootfs. Production
+// agents always use the socket client, which creates a well-formed completion.
+func diagnosticAgentFault(kind string) (string, error) {
+	connection, err := connectHostLocalTools()
+	if err != nil {
+		return "", err
+	}
+	defer connection.Close()
+	request := []byte(`{"id":"diagnostic-local-fault","op":"fs.read","body":{"path":"/workspace/missing.txt"}}`)
+	if err := writeFrame(connection, request); err != nil {
+		return "", err
+	}
+	authorizationFrame, err := readFrame(connection)
+	if err != nil {
+		return "", err
+	}
+	var authorization hostAuthorization
+	if err := json.Unmarshal(authorizationFrame, &authorization); err != nil || !authorization.OK || !authorization.Body.Authorized {
+		return "", fmt.Errorf("invalid local authorization")
+	}
+	if kind == "abandon" {
+		// Keep the real guest stream open past the configured host completion
+		// deadline. This proves the timeout branch rather than only the EOF
+		// branch of action.abandoned.
+		time.Sleep(250 * time.Millisecond)
+		return "authorized", nil
+	}
+	completionID := authorization.ID
+	if kind == "invalid_completion" {
+		completionID = "mismatched-diagnostic-id"
+	}
+	result := any(map[string]any{"value": "ok"})
+	if kind == "oversized" {
+		result = map[string]any{"value": strings.Repeat("x", 4096)}
+	}
+	completion := completedSuccess{ID: completionID, Op: "local.completed"}
+	completion.Body.ActionID = authorization.Body.ActionID
+	completion.Body.Outcome = "success"
+	completion.Body.Result = result
+	payload, err := json.Marshal(completion)
+	if err != nil {
+		return "", err
+	}
+	if err := writeFrame(connection, payload); err != nil {
 		return "", err
 	}
 	response, err := readFrame(connection)

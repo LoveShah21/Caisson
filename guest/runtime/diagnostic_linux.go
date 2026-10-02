@@ -179,6 +179,16 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			return
 		}
 	}
+	if request.Operation == "agent_fault" && request.Path == "" &&
+		(request.Value == "abandon" || request.Value == "invalid_completion" || request.Value == "oversized") {
+		value, err := diagnosticAgentFault(request.Value)
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
+			return
+		}
+		writeDiagnostic(fd, diagnosticResponse{Error: "agent fault diagnostic failed"})
+		return
+	}
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})
 }
 

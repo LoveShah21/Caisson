@@ -49,7 +49,7 @@ afterEach(async () => {
   );
 });
 
-describe("Firecracker M-2 runtime", () => {
+describe("Firecracker Alpine runtime", () => {
   it.skipIf(!kvmEnabled)(
     "round-trips a bounded framed broker.call over real Firecracker vsock",
     async () => {
@@ -112,11 +112,12 @@ describe("Firecracker M-2 runtime", () => {
     async () => {
       const context = await boot(agentDiagnosticRootfs!);
       try {
-        expect((await waitForDiagnostic(context, { operation: "network_probe", value: "node" })).value).toBe(
-          "network-unreachable",
-        );
         expect(
-          (await waitForDiagnostic(context, { operation: "network_probe", value: "python3" })).value,
+          (await waitForDiagnostic(context, { operation: "network_probe", value: "node" })).value,
+        ).toBe("network-unreachable");
+        expect(
+          (await waitForDiagnostic(context, { operation: "network_probe", value: "python3" }))
+            .value,
         ).toBe("network-unreachable");
       } finally {
         await context.driver.destroy(context.prepared.handle);
