@@ -94,6 +94,9 @@ func diagnosticAgentFault(kind string) (string, error) {
 func diagnosticAgentSocketState() (string, error) {
 	info, err := os.Lstat(agentSocketPath)
 	if err != nil {
+		if diagnosticAgentSocketFailure != "" {
+			return "", fmt.Errorf("agent socket startup failed: %s", diagnosticAgentSocketFailure)
+		}
 		return "", err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -101,4 +104,8 @@ func diagnosticAgentSocketState() (string, error) {
 		return "", fmt.Errorf("agent socket has no Linux stat data")
 	}
 	return fmt.Sprintf("%04o:%d:%d", info.Mode().Perm(), stat.Uid, stat.Gid), nil
+}
+
+func setDiagnosticAgentSocketFailure(err error) {
+	diagnosticAgentSocketFailure = err.Error()
 }

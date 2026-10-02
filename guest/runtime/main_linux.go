@@ -47,6 +47,14 @@ func main() {
 			}()
 		}
 		if err := serveAgentSocket(); err != nil {
+			if diagnosticRuntimeBuild {
+				setDiagnosticAgentSocketFailure(err)
+				// The diagnostic image is permanently ineligible for production and
+				// base snapshots. Keep its control listener alive long enough to
+				// expose a startup error to a KVM test; the production image still
+				// exits fail-closed below.
+				select {}
+			}
 			fail("agent socket failed")
 		}
 		return

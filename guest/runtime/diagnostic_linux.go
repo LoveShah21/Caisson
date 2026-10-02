@@ -22,6 +22,8 @@ import (
 
 const diagnosticPort = 1026
 
+var diagnosticAgentSocketFailure string
+
 type diagnosticRequest struct {
 	Operation string `json:"operation"`
 	Path      string `json:"path,omitempty"`

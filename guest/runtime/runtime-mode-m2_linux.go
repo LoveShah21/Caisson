@@ -19,3 +19,5 @@ func diagnosticAgentSocketState() (string, error) {
 func diagnosticAgentFault(_ string) (string, error) {
 	return "", fmt.Errorf("agent runtime diagnostics are unavailable")
 }
+
+func setDiagnosticAgentSocketFailure(_ error) {}
