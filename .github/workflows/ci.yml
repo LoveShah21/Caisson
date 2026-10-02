@@ -41,6 +41,10 @@ jobs:
       - name: Test policy source
         run: pnpm policy:test
 
+      - name: Test guest subprocess allowlist
+        working-directory: guest/runtime
+        run: go test -tags=agent .
+
       - name: Lint
         run: pnpm lint
 
