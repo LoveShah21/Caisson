@@ -18,8 +18,8 @@ import {
   SessionIdentityResolver,
   SessionSnapshotCrypto,
   SessionSnapshotService,
-  SessionTokenService,
   type SessionSnapshotStore,
+  SessionTokenService,
 } from "../../apps/control-plane/src/index.js";
 import {
   AuditOutboxWriter,
@@ -416,8 +416,7 @@ describe("Firecracker M-3 agent runtime", () => {
         expect(serializedRows).not.toContain(credentialCanary);
       } finally {
         await driver.destroy(prepared.handle);
-        await identities.release(prepared.transport);
-        await host.release(prepared.transport);
+        await releaseTransportBinding(identities, host, prepared);
       }
     },
     180_000,
@@ -528,8 +527,7 @@ describe("Firecracker M-3 agent runtime", () => {
         expect(point?.resume_action_id).toBe(actionId);
 
         await driver.destroy(source.handle);
-        await identities.release(source.transport);
-        await host.release(source.transport);
+        await releaseTransportBinding(identities, host, source);
         restored = await snapshotService.restore(ref, sessionId, {
           id: randomUUID(),
           image: "agent-runtime",
@@ -560,18 +558,32 @@ describe("Firecracker M-3 agent runtime", () => {
       } finally {
         if (restored !== undefined) {
           await driver.destroy(restored.handle);
-          await identities.release(restored.transport);
-          await host.release(restored.transport);
+          await releaseTransportBinding(identities, host, restored);
         } else {
           await driver.destroy(source.handle).catch(() => undefined);
-          await identities.release(source.transport).catch(() => undefined);
-          await host.release(source.transport).catch(() => undefined);
+          await releaseTransportBinding(identities, host, source).catch(() => undefined);
         }
       }
     },
     180_000,
   );
 });
+
+async function releaseTransportBinding(
+  identityResolver: SessionIdentityResolver,
+  host: FirecrackerBrokerTransportHost,
+  prepared: PreparedSandbox,
+): Promise<void> {
+  try {
+    await identityResolver.release({
+      hostId: prepared.transport.hostId,
+      transportKind: prepared.transport.kind,
+      peerIdentifier: prepared.transport.peerIdentifier,
+    });
+  } finally {
+    await host.release(prepared.transport);
+  }
+}
 
 async function invoke(
   host: FirecrackerBrokerTransportHost,
