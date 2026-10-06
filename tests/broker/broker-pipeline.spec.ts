@@ -10,6 +10,7 @@ import {
   PostgresAdapter,
 } from "../../apps/broker/src/index.js";
 import {
+  SessionActionGate,
   SessionIdentityResolver,
   SessionTokenService,
 } from "../../apps/control-plane/src/index.js";
@@ -41,6 +42,7 @@ describe("BrokerPipeline", () => {
   let adapter: PostgresAdapter;
   let audit: AuditOutboxWriter;
   let pipeline: BrokerPipeline;
+  let actionGate: SessionActionGate;
 
   beforeAll(async () => {
     [postgres, clickhouse] = await Promise.all([
@@ -83,8 +85,10 @@ describe("BrokerPipeline", () => {
       resultSizeBytes: 1_024,
     });
     audit = new AuditOutboxWriter(postgres.sql, sink);
+    actionGate = new SessionActionGate();
     initializeTelemetry();
     pipeline = new BrokerPipeline({
+      actionGate,
       identities,
       services: new DatabaseBrokerServiceResolver(postgres.sql, [adapter]),
       policyBundles: new PolicyBundleLoader(postgres.sql),
@@ -157,10 +161,46 @@ describe("BrokerPipeline", () => {
     }
   }, 30_000);
 
+  it("rejects and durably audits a new action while snapshot capture holds admission", async () => {
+    let releaseCapture!: () => void;
+    const capture = actionGate.withExclusiveCapture(
+      sessionId,
+      1_000,
+      () => new Promise<void>((resolve) => (releaseCapture = resolve)),
+    );
+    await Promise.resolve();
+
+    const response = await pipeline.handle(hostPeer, {
+      id: "snapshot-gate-denial",
+      op: "broker.call",
+      body: {
+        service: "postgres",
+        method: "query",
+        params: { sql: "SELECT 1" },
+        idempotencyKey: "snapshot-gate-denial",
+        intent: "prove snapshot admission closes",
+      },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "SESSION_SUSPENDED" } });
+    const [row] = await postgres.sql<{ payload: { eventType: string; errorCode: string } }[]>`
+      SELECT payload FROM audit_outbox
+      WHERE session_id = ${sessionId} AND payload->>'errorCode' = 'SESSION_SUSPENDED'
+      ORDER BY seq DESC LIMIT 1
+    `;
+    expect(row?.payload).toMatchObject({
+      eventType: "action.denied",
+      errorCode: "SESSION_SUSPENDED",
+    });
+
+    releaseCapture();
+    await capture;
+  });
+
   it("does not fetch a credential or invoke an adapter when action.started cannot deliver", async () => {
     let secretsFetched = 0;
     let adapterCalled = 0;
     const failing = new BrokerPipeline({
+      actionGate: new SessionActionGate(),
       identities: new SessionIdentityResolver(postgres.sql),
       services: {
         resolveService: async () => ({

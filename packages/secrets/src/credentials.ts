@@ -49,7 +49,14 @@ export interface S3Credentials {
   readonly secretAccessKey: SecretString;
 }
 
-export type Credentials = PostgresCredentials | S3Credentials;
+/** A host-only wrapping key for encrypted per-session snapshot DEKs. */
+export interface SnapshotKekCredentials {
+  readonly kind: "snapshot_kek";
+  readonly keyId: string;
+  readonly key: SecretString;
+}
+
+export type Credentials = PostgresCredentials | S3Credentials | SnapshotKekCredentials;
 
 const StoredPostgresCredentialsSchema = z
   .object({
@@ -74,9 +81,19 @@ const StoredS3CredentialsSchema = z
   })
   .strict();
 
+const StoredSnapshotKekCredentialsSchema = z
+  .object({
+    kind: z.literal("snapshot_kek"),
+    keyId: z.string().min(1).max(128),
+    /** Base64-encoded, at least 256 bits after decoding. */
+    key: z.string().min(1),
+  })
+  .strict();
+
 const StoredCredentialsSchema = z.discriminatedUnion("kind", [
   StoredPostgresCredentialsSchema,
   StoredS3CredentialsSchema,
+  StoredSnapshotKekCredentialsSchema,
 ]);
 
 export function parseCredentials(value: unknown, environment: string | undefined): Credentials {
@@ -89,6 +106,17 @@ export function parseCredentials(value: unknown, environment: string | undefined
       kind: "s3",
       accessKeyId: new SecretString(parsed.data.accessKeyId),
       secretAccessKey: new SecretString(parsed.data.secretAccessKey),
+    };
+  }
+  if (parsed.data.kind === "snapshot_kek") {
+    const bytes = Buffer.from(parsed.data.key, "base64");
+    if (bytes.byteLength !== 32) {
+      throw new CaissonError("SECRET_UNAVAILABLE", "credential unavailable");
+    }
+    return {
+      kind: "snapshot_kek",
+      keyId: parsed.data.keyId,
+      key: new SecretString(parsed.data.key),
     };
   }
   if (parsed.data.sslMode === "disable" && environment === "production") {

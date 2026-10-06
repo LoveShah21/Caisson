@@ -53,6 +53,33 @@ describe("single-session lifecycle", () => {
     expect((await service.get(created.sessionId)).status).toBe("ready");
   });
 
+  it("pins the active base lineage when a Firecracker session is created", async () => {
+    const baseSnapshotId = "018f0000-0000-7000-8000-0000000002b1";
+    await postgres.sql`
+      INSERT INTO snapshots (
+        id, kind, bucket, manifest_key, manifest_sha256, manifest_size_bytes,
+        manifest_key_id, built_at
+      ) VALUES (
+        ${baseSnapshotId}, 'base', 'snapshots', 'base/pinned/manifest.json',
+        ${"a".repeat(64)}, 1, 'test-key', now()
+      )
+    `;
+    await postgres.sql`
+      INSERT INTO settings (key, value, updated_by)
+      VALUES ('active_base_snapshot', ${{ snapshotId: baseSnapshotId }}::jsonb, 'test')
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by
+    `;
+    const driver = new ControlledDriver("firecracker");
+    const service = makeService(postgres, driver, new ControlledHost());
+    const created = await service.create(request());
+    const [session] = await postgres.sql<{ base_snapshot_id: string | null }[]>`
+      SELECT base_snapshot_id FROM sessions WHERE id = ${created.sessionId}
+    `;
+    expect(session?.base_snapshot_id).toBe(baseSnapshotId);
+    driver.resolveStart();
+    await service.waitForStartup(created.sessionId);
+  });
+
   it("retains binding when destroy fails and releases it after reconciliation", async () => {
     const driver = new ControlledDriver();
     const host = new ControlledHost();
@@ -295,6 +322,12 @@ function makeService(
     driver,
     transportHost: host,
     audit: new AuditOutboxWriter(fixture.sql, new NoopSink()),
+    sessionSnapshotKeys: {
+      provisionSessionKey: async () => undefined,
+      capture: async () => undefined,
+      eraseSession: async () => undefined,
+      retryPhysicalDeletion: async () => undefined,
+    },
     websocketBaseUrl: "ws://control-plane.test",
     startTimeoutMs,
   });
@@ -344,7 +377,9 @@ class ControlledDriver implements IsolationDriver {
   #start: Promise<void>;
   #resolveStart!: () => void;
   #rejectStart!: () => void;
-  constructor() {
+  readonly #name: "container" | "firecracker";
+  constructor(name: "container" | "firecracker" = "container") {
+    this.#name = name;
     this.#start = new Promise<void>((resolve, reject) => {
       this.#resolveStart = resolve;
       this.#rejectStart = () => reject(new Error("start failed"));
@@ -352,7 +387,11 @@ class ControlledDriver implements IsolationDriver {
     void this.#start.catch(() => undefined);
   }
   capabilities() {
-    return { hardwareIsolation: false, snapshotSupport: false, maxConcurrent: 1 };
+    return {
+      hardwareIsolation: this.#name === "firecracker",
+      snapshotSupport: this.#name === "firecracker",
+      maxConcurrent: 1,
+    };
   }
   async prepare(spec: { id: string }, host: TransportHost) {
     const transport = {
@@ -361,7 +400,7 @@ class ControlledDriver implements IsolationDriver {
       peerIdentifier: `socket-${spec.id}`,
     };
     await host.reserve(transport);
-    return { handle: { id: spec.id, driver: "container" as const }, transport };
+    return { handle: { id: spec.id, driver: this.#name }, transport };
   }
   async start(): Promise<void> {
     return this.#start;

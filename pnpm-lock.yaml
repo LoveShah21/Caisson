@@ -256,6 +256,9 @@ importers:
       '@caisson/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@caisson/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
       '@caisson/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry

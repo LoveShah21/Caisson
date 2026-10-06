@@ -46,11 +46,12 @@ const expectedRuntimeArtifacts = (await readFile(runtimeArtifactsPath, "utf8"))
   .split(/\r?\n/u)
   .map((value) => value.trim())
   .filter((value) => value !== "" && !value.startsWith("#"));
+const requiredRuntimeArtifacts = ["/run/caisson/agent.sock", "/run/caisson/resume.json"];
 if (
-  expectedRuntimeArtifacts.length !== 1 ||
-  expectedRuntimeArtifacts[0] !== "/run/caisson/agent.sock"
+  expectedRuntimeArtifacts.length !== requiredRuntimeArtifacts.length ||
+  expectedRuntimeArtifacts.some((artifact, index) => artifact !== requiredRuntimeArtifacts[index])
 ) {
-  throw new Error("agent runtime artifact allowlist must contain only /run/caisson/agent.sock");
+  throw new Error("agent runtime artifact allowlist is invalid");
 }
 if (printRuntimeArtifacts) {
   process.stdout.write(`${expectedRuntimeArtifacts.join("\n")}\n`);

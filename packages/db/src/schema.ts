@@ -71,6 +71,7 @@ export const sessions = pgTable(
     driver: text(),
     hardwareIsolated: boolean("hardware_isolated").notNull(),
     snapshotRef: text("snapshot_ref"),
+    baseSnapshotId: uuid("base_snapshot_id"),
     validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     idleTimeoutSeconds: integer("idle_timeout_s").notNull().default(300),
@@ -185,8 +186,60 @@ export const snapshots = pgTable(
     builtAt: timestamp("built_at", { withTimezone: true }).notNull().defaultNow(),
     promotedAt: timestamp("promoted_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    baseSnapshotId: uuid("base_snapshot_id"),
+    lineageSessionId: uuid("lineage_session_id").references(() => sessions.id, {
+      onDelete: "cascade",
+    }),
+    resumeAuditSeq: integer("resume_audit_seq"),
+    resumeActionId: uuid("resume_action_id"),
+    deletionState: text("deletion_state").notNull().default("active"),
   },
   (table) => [index("snapshots_kind_promoted_idx").on(table.kind, table.promotedAt.desc())],
+);
+
+export const sessionSnapshotKeys = pgTable("session_snapshot_keys", {
+  sessionId: uuid("session_id")
+    .primaryKey()
+    .references(() => sessions.id, { onDelete: "cascade" }),
+  rootKekKeyId: text("root_kek_key_id").notNull(),
+  wrapNonce: bytea("wrap_nonce").notNull(),
+  wrappedSessionKek: bytea("wrapped_session_kek").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const snapshotKeys = pgTable(
+  "snapshot_keys",
+  {
+    snapshotId: uuid("snapshot_id")
+      .primaryKey()
+      .references(() => snapshots.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    wrapNonce: bytea("wrap_nonce").notNull(),
+    wrappedDek: bytea("wrapped_dek").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("snapshot_keys_session_idx").on(table.sessionId)],
+);
+
+export const snapshotDeletionOutbox = pgTable(
+  "snapshot_deletion_outbox",
+  {
+    snapshotId: uuid("snapshot_id")
+      .primaryKey()
+      .references(() => snapshots.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    bucket: text().notNull(),
+    manifestKey: text("manifest_key").notNull(),
+    attempts: integer().notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [index("snapshot_deletion_outbox_pending_idx").on(table.createdAt)],
 );
 
 export const auditOutbox = pgTable(

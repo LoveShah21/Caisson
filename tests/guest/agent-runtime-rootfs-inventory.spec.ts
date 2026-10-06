@@ -41,7 +41,7 @@ describe("M-3 agent runtime rootfs inventory", () => {
               encoding: "utf8",
             },
           ),
-        ).toBe("/run/caisson/agent.sock\n");
+        ).toBe("/run/caisson/agent.sock\n/run/caisson/resume.json\n");
         const unexpected = join(directory, "unexpected");
         await writeFile(unexpected, "must not be in the agent rootfs");
         execFileSync("debugfs", ["-w", "-R", `write ${unexpected} /unexpected`, rootfs]);

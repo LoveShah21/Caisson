@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { type AuditOutboxWriter, containsSecretShape } from "@caisson/audit";
-import type { SessionIdentityResolver, TransportPeer } from "@caisson/control-plane";
+import type {
+  SessionActionGate,
+  SessionActionLease,
+  SessionIdentityResolver,
+  TransportPeer,
+} from "@caisson/control-plane";
 import type { PolicyBundleLoader } from "@caisson/policy";
 import {
   CaissonError,
@@ -37,6 +42,7 @@ export interface LocalToolPipelineOptions {
   readonly identities: SessionIdentityResolver;
   readonly policyBundles: PolicyBundleLoader;
   readonly audit: AuditOutboxWriter;
+  readonly actionGate: SessionActionGate;
   readonly resultMaxBytes: number;
   readonly previewMaxBytes: number;
 }
@@ -50,6 +56,7 @@ export interface LocalToolAuthorization {
   readonly policyReason: string;
   readonly scopeUsed: string;
   readonly startedAt: number;
+  readonly lease: SessionActionLease;
 }
 
 /** Host-side authorization and audit state for guest-local tools. */
@@ -57,6 +64,7 @@ export class LocalToolPipeline {
   readonly #identities: SessionIdentityResolver;
   readonly #policyBundles: PolicyBundleLoader;
   readonly #audit: AuditOutboxWriter;
+  readonly #actionGate: SessionActionGate;
   readonly #resultMaxBytes: number;
   readonly #previewMaxBytes: number;
 
@@ -66,6 +74,7 @@ export class LocalToolPipeline {
     this.#identities = options.identities;
     this.#policyBundles = options.policyBundles;
     this.#audit = options.audit;
+    this.#actionGate = options.actionGate;
     this.#resultMaxBytes = options.resultMaxBytes;
     this.#previewMaxBytes = options.previewMaxBytes;
   }
@@ -75,93 +84,121 @@ export class LocalToolPipeline {
       const startedAt = performance.now();
       const identity = await this.#identities.resolve(peer);
       const scopeUsed = scopeFor(request.op);
-      const bundle = await this.#policyBundles.load(identity.policyBundleId);
       const actionId = randomUUID();
-      if (request.op === "proc.exec") {
-        try {
-          assertAllowedExec(request.body.argv);
-        } catch (error) {
-          const caisson = asCaissonError(error);
-          await this.#audit.persistDurably(
-            auditEvent({
-              identity,
-              actionId,
-              request,
-              eventType: "action.denied",
-              decision: "deny",
-              policyBundleId: bundle.id,
-              policyReason: caisson.message,
-              scopeUsed,
-              durationMs: elapsed(startedAt),
-              errorCode: caisson.code,
-              errorMessage: caisson.message,
-            }),
-          );
-          throw caisson;
-        }
-      }
-      const decision = bundle.evaluator.evaluate({
-        session: {
-          id: identity.sessionId,
-          roles: identity.roles,
-          scopes: identity.scopes,
-          approvalMode: identity.approvalMode,
-          expiresAt: identity.expiresAt.toISOString(),
-          requestedBy: identity.requestedBy,
-          purpose: identity.purpose,
-        },
-        action: {
-          service: "guest",
-          method: request.op,
-          sideEffecting:
-            request.op === "fs.write" || request.op === "fs.edit" || request.op === "proc.exec",
-          scopeRequired: scopeUsed,
-          params: request.body,
-        },
-        context: { now: new Date().toISOString(), hardwareIsolated: identity.hardwareIsolated },
-      });
-      if (decision.decision !== "allow") {
+      const lease = this.#actionGate.enter(identity.sessionId);
+      if (lease === undefined) {
+        const error = new CaissonError("SESSION_SUSPENDED", "session snapshot capture is active", {
+          actionId,
+        });
         await this.#audit.persistDurably(
           auditEvent({
             identity,
             actionId,
             request,
             eventType: "action.denied",
-            decision: decision.decision,
+            decision: "deny",
+            policyBundleId: identity.policyBundleId,
+            policyReason: error.message,
+            scopeUsed,
+            durationMs: elapsed(startedAt),
+            errorCode: error.code,
+            errorMessage: error.message,
+          }),
+        );
+        throw error;
+      }
+      try {
+        const bundle = await this.#policyBundles.load(identity.policyBundleId);
+        if (request.op === "proc.exec") {
+          try {
+            assertAllowedExec(request.body.argv);
+          } catch (error) {
+            const caisson = asCaissonError(error);
+            await this.#audit.persistDurably(
+              auditEvent({
+                identity,
+                actionId,
+                request,
+                eventType: "action.denied",
+                decision: "deny",
+                policyBundleId: bundle.id,
+                policyReason: caisson.message,
+                scopeUsed,
+                durationMs: elapsed(startedAt),
+                errorCode: caisson.code,
+                errorMessage: caisson.message,
+              }),
+            );
+            throw caisson;
+          }
+        }
+        const decision = bundle.evaluator.evaluate({
+          session: {
+            id: identity.sessionId,
+            roles: identity.roles,
+            scopes: identity.scopes,
+            approvalMode: identity.approvalMode,
+            expiresAt: identity.expiresAt.toISOString(),
+            requestedBy: identity.requestedBy,
+            purpose: identity.purpose,
+          },
+          action: {
+            service: "guest",
+            method: request.op,
+            sideEffecting:
+              request.op === "fs.write" || request.op === "fs.edit" || request.op === "proc.exec",
+            scopeRequired: scopeUsed,
+            params: request.body,
+          },
+          context: { now: new Date().toISOString(), hardwareIsolated: identity.hardwareIsolated },
+        });
+        if (decision.decision !== "allow") {
+          await this.#audit.persistDurably(
+            auditEvent({
+              identity,
+              actionId,
+              request,
+              eventType: "action.denied",
+              decision: decision.decision,
+              policyBundleId: bundle.id,
+              policyReason: decision.reason,
+              scopeUsed,
+              durationMs: elapsed(startedAt),
+            }),
+          );
+          throw new CaissonError(
+            decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
+            decision.reason,
+            { scopeRequired: scopeUsed, actionId },
+          );
+        }
+        await this.#audit.persistBeforeExecution(
+          auditEvent({
+            identity,
+            actionId,
+            request,
+            eventType: "action.started",
+            decision: "allow",
             policyBundleId: bundle.id,
             policyReason: decision.reason,
             scopeUsed,
-            durationMs: elapsed(startedAt),
           }),
         );
-        throw new CaissonError(
-          decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
-          decision.reason,
-          { scopeRequired: scopeUsed, actionId },
-        );
-      }
-      await this.#audit.persistBeforeExecution(
-        auditEvent({
-          identity,
+        return {
+          id: request.id,
           actionId,
+          identity,
           request,
-          eventType: "action.started",
-          decision: "allow",
           policyBundleId: bundle.id,
           policyReason: decision.reason,
           scopeUsed,
-        }),
-      );
-      return {
-        id: request.id,
-        actionId,
-        identity,
-        request,
-        policyBundleId: bundle.id,
-        policyReason: decision.reason,
-        scopeUsed,
-        startedAt,
-      };
+          startedAt,
+          lease,
+        };
+      } catch (error: unknown) {
+        lease.release();
+        throw error;
+      }
     });
   }
 
@@ -177,119 +214,137 @@ export class LocalToolPipeline {
     authorization: LocalToolAuthorization,
     completion: LocalCompletionRequest,
   ): Promise<LocalToolResponse> {
-    if (completion.id !== authorization.id || completion.body.actionId !== authorization.actionId) {
-      return this.invalidCompletion(authorization, "completion id does not match authorization");
-    }
-    if (completion.body.outcome === "failure") {
+    try {
+      if (
+        completion.id !== authorization.id ||
+        completion.body.actionId !== authorization.actionId
+      ) {
+        return this.invalidCompletion(authorization, "completion id does not match authorization");
+      }
+      if (completion.body.outcome === "failure") {
+        await this.#audit.persistDurably(
+          auditEvent({
+            identity: authorization.identity,
+            actionId: authorization.actionId,
+            request: authorization.request,
+            eventType: "action.failed",
+            decision: "allow",
+            policyBundleId: authorization.policyBundleId,
+            policyReason: authorization.policyReason,
+            scopeUsed: authorization.scopeUsed,
+            durationMs: elapsed(authorization.startedAt),
+            errorCode: completion.body.error.code,
+            errorMessage: auditSafeErrorMessage(completion.body.error.message),
+          }),
+        );
+        return LocalToolResponseSchema.parse({
+          id: authorization.id,
+          ok: false,
+          error: { ...completion.body.error, actionId: authorization.actionId },
+        });
+      }
+
+      const encoded = JSON.stringify(completion.body.result);
+      const resultBytes = Buffer.byteLength(encoded, "utf8");
+      const auditPreview = previewFor(completion.body.result, this.#previewMaxBytes);
+      const truncated = resultBytes > this.#resultMaxBytes;
+      // The result is guest-authored. Its full byte count and hash remain auditable,
+      // while the guest receives only a host-derived bounded representation.
+      const responseResult = truncated
+        ? {
+            truncated: true,
+            preview: previewFor(completion.body.result, this.#resultMaxBytes).value,
+          }
+        : completion.body.result;
       await this.#audit.persistDurably(
         auditEvent({
           identity: authorization.identity,
           actionId: authorization.actionId,
           request: authorization.request,
-          eventType: "action.failed",
+          eventType: "action.completed",
           decision: "allow",
           policyBundleId: authorization.policyBundleId,
           policyReason: authorization.policyReason,
           scopeUsed: authorization.scopeUsed,
           durationMs: elapsed(authorization.startedAt),
-          errorCode: completion.body.error.code,
-          errorMessage: auditSafeErrorMessage(completion.body.error.message),
+          resultBytes,
+          resultHash: sha256(encoded),
+          paramsPreview: auditPreview.value,
+          redactionCount: auditPreview.redactionCount,
         }),
       );
       return LocalToolResponseSchema.parse({
         id: authorization.id,
-        ok: false,
-        error: { ...completion.body.error, actionId: authorization.actionId },
-      });
-    }
-
-    const encoded = JSON.stringify(completion.body.result);
-    const resultBytes = Buffer.byteLength(encoded, "utf8");
-    const auditPreview = previewFor(completion.body.result, this.#previewMaxBytes);
-    const truncated = resultBytes > this.#resultMaxBytes;
-    // The result is guest-authored. Its full byte count and hash remain auditable,
-    // while the guest receives only a host-derived bounded representation.
-    const responseResult = truncated
-      ? { truncated: true, preview: previewFor(completion.body.result, this.#resultMaxBytes).value }
-      : completion.body.result;
-    await this.#audit.persistDurably(
-      auditEvent({
-        identity: authorization.identity,
-        actionId: authorization.actionId,
-        request: authorization.request,
-        eventType: "action.completed",
-        decision: "allow",
-        policyBundleId: authorization.policyBundleId,
-        policyReason: authorization.policyReason,
-        scopeUsed: authorization.scopeUsed,
-        durationMs: elapsed(authorization.startedAt),
-        resultBytes,
-        resultHash: sha256(encoded),
-        paramsPreview: auditPreview.value,
-        redactionCount: auditPreview.redactionCount,
-      }),
-    );
-    return LocalToolResponseSchema.parse({
-      id: authorization.id,
-      ok: true,
-      body: {
-        result: responseResult,
-        meta: {
-          actionId: authorization.actionId,
-          durationMs: elapsed(authorization.startedAt),
-          ...(truncated ? { truncated: true } : {}),
+        ok: true,
+        body: {
+          result: responseResult,
+          meta: {
+            actionId: authorization.actionId,
+            durationMs: elapsed(authorization.startedAt),
+            ...(truncated ? { truncated: true } : {}),
+          },
         },
-      },
-    });
+      });
+    } finally {
+      authorization.lease.release();
+    }
   }
 
   async abandon(authorization: LocalToolAuthorization, reason: string): Promise<void> {
-    await this.#audit.persistDurably(
-      auditEvent({
-        identity: authorization.identity,
-        actionId: authorization.actionId,
-        request: authorization.request,
-        eventType: "action.abandoned",
-        decision: "allow",
-        policyBundleId: authorization.policyBundleId,
-        policyReason: authorization.policyReason,
-        scopeUsed: authorization.scopeUsed,
-        durationMs: elapsed(authorization.startedAt),
-        errorCode: "SANDBOX_FAILED",
-        errorMessage: reason,
-      }),
-    );
+    try {
+      await this.#audit.persistDurably(
+        auditEvent({
+          identity: authorization.identity,
+          actionId: authorization.actionId,
+          request: authorization.request,
+          eventType: "action.abandoned",
+          decision: "allow",
+          policyBundleId: authorization.policyBundleId,
+          policyReason: authorization.policyReason,
+          scopeUsed: authorization.scopeUsed,
+          durationMs: elapsed(authorization.startedAt),
+          errorCode: "SANDBOX_FAILED",
+          errorMessage: reason,
+        }),
+      );
+    } finally {
+      authorization.lease.release();
+    }
   }
 
   async invalidCompletion(
     authorization: LocalToolAuthorization,
     reason: string,
   ): Promise<LocalToolResponse> {
-    await this.#audit.persistDurably(
-      auditEvent({
-        identity: authorization.identity,
-        actionId: authorization.actionId,
-        request: authorization.request,
-        eventType: "action.invalid_completion",
-        decision: "allow",
-        policyBundleId: authorization.policyBundleId,
-        policyReason: authorization.policyReason,
-        scopeUsed: authorization.scopeUsed,
-        durationMs: elapsed(authorization.startedAt),
-        errorCode: "PARAMS_INVALID",
-        errorMessage: reason,
-      }),
-    );
-    return LocalToolResponseSchema.parse({
-      id: authorization.id,
-      ok: false,
-      error: {
-        code: "PARAMS_INVALID",
-        message: "invalid local tool completion",
-        details: {},
-        actionId: authorization.actionId,
-      },
-    });
+    try {
+      await this.#audit.persistDurably(
+        auditEvent({
+          identity: authorization.identity,
+          actionId: authorization.actionId,
+          request: authorization.request,
+          eventType: "action.invalid_completion",
+          decision: "allow",
+          policyBundleId: authorization.policyBundleId,
+          policyReason: authorization.policyReason,
+          scopeUsed: authorization.scopeUsed,
+          durationMs: elapsed(authorization.startedAt),
+          errorCode: "PARAMS_INVALID",
+          errorMessage: reason,
+        }),
+      );
+      return LocalToolResponseSchema.parse({
+        id: authorization.id,
+        ok: false,
+        error: {
+          code: "PARAMS_INVALID",
+          message: "invalid local tool completion",
+          details: {},
+          actionId: authorization.actionId,
+        },
+      });
+    } finally {
+      authorization.lease.release();
+    }
   }
 }
 

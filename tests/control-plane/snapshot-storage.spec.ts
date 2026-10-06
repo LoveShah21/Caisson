@@ -14,11 +14,15 @@ import {
   EnvManifestKeyProvider,
   S3BaseSnapshotStore,
 } from "../../apps/control-plane/src/snapshot-storage.js";
+import { SessionSnapshotCrypto } from "../../apps/control-plane/src/session-snapshot-crypto.js";
+import { S3SessionSnapshotStore } from "../../apps/control-plane/src/session-snapshot-storage.js";
 import type {
   LocalSnapshot,
   SnapshotObjectRef,
   SnapshotRef,
 } from "../../packages/isolation/src/index.js";
+import { SecretString } from "../../packages/secrets/src/credentials.js";
+import type { SecretBackend } from "../../packages/secrets/src/types.js";
 import { createMinioFixture, type MinioFixture } from "../helpers/minio.js";
 
 const keyId = "test-manifest-key";
@@ -173,6 +177,113 @@ describe("S3BaseSnapshotStore", () => {
   });
 });
 
+describe("S3SessionSnapshotStore", () => {
+  it("encrypts each session artifact, confirms SSE, and restores only its originating lineage", async () => {
+    const crypto = sessionCrypto();
+    const store = createSessionStore(crypto);
+    const sessionKek = await crypto.createWrappedSessionKek();
+    const snapshotDek = await crypto.createWrappedSnapshotDek(sessionKek);
+    const siblingDek = await crypto.createWrappedSnapshotDek(sessionKek);
+    const sessionId = "018f0000-0000-7000-8000-000000000b01";
+    const baseSnapshotId = "018f0000-0000-7000-8000-000000000b02";
+    const source = join(root, "session-source");
+    await writeFile(`${source}.state`, "session-state");
+    await writeFile(`${source}.memory`, "session-memory");
+    const ref = await store.store(
+      {
+        id: "018f0000-0000-7000-8000-000000000b03",
+        kind: "session",
+        statePath: `${source}.state`,
+        memoryPath: `${source}.memory`,
+        createdAt: "2026-10-06T00:00:00.000Z",
+      },
+      { sessionId, baseSnapshotId, sessionKek, snapshotDek },
+    );
+    const manifest = (await manifestFor(ref)) as TestSessionManifest;
+    for (const artifact of manifest.artifacts) {
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: artifact.object.bucket, Key: artifact.object.key }),
+      );
+      expect(head.ServerSideEncryption).toBe("AES256");
+      expect(
+        (await objectBytes(artifact.object.bucket, artifact.object.key)).includes(
+          Buffer.from(`session-${artifact.name}`),
+        ),
+      ).toBe(false);
+    }
+
+    const resolved = await store.resolve(ref, {
+      sessionId,
+      sessionKek,
+      snapshotDek,
+      base: baseResolution(baseSnapshotId),
+    });
+    expect(await readFile(resolved.statePath, "utf8")).toBe("session-state");
+    expect(await readFile(resolved.memoryPath, "utf8")).toBe("session-memory");
+    await expect(
+      store.resolve(ref, {
+        sessionId: "018f0000-0000-7000-8000-000000000bff",
+        sessionKek,
+        snapshotDek,
+        base: baseResolution(baseSnapshotId),
+      }),
+    ).rejects.toThrow("lineage is invalid");
+    await expect(
+      store.resolve(ref, {
+        sessionId,
+        sessionKek,
+        snapshotDek: siblingDek,
+        base: baseResolution(baseSnapshotId),
+      }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("rejects a modified encrypted artifact without leaving a partial session cache entry", async () => {
+    const crypto = sessionCrypto();
+    const store = createSessionStore(crypto);
+    const sessionKek = await crypto.createWrappedSessionKek();
+    const snapshotDek = await crypto.createWrappedSnapshotDek(sessionKek);
+    const sessionId = "018f0000-0000-7000-8000-000000000c01";
+    const baseSnapshotId = "018f0000-0000-7000-8000-000000000c02";
+    const source = join(root, "tampered-session-source");
+    await writeFile(`${source}.state`, "state");
+    await writeFile(`${source}.memory`, "memory");
+    const ref = await store.store(
+      {
+        id: "018f0000-0000-7000-8000-000000000c03",
+        kind: "session",
+        statePath: `${source}.state`,
+        memoryPath: `${source}.memory`,
+        createdAt: "2026-10-06T00:00:00.000Z",
+      },
+      { sessionId, baseSnapshotId, sessionKek, snapshotDek },
+    );
+    const manifest = (await manifestFor(ref)) as TestSessionManifest;
+    const state = manifest.artifacts.find((artifact) => artifact.name === "state");
+    if (state === undefined) throw new Error("session state artifact is missing");
+    await client.send(
+      new PutObjectCommand({
+        Bucket: state.object.bucket,
+        Key: state.object.key,
+        Body: Buffer.from("tampered"),
+        ServerSideEncryption: "AES256",
+      }),
+    );
+    await expect(
+      store.resolve(ref, {
+        sessionId,
+        sessionKek,
+        snapshotDek,
+        base: baseResolution(baseSnapshotId),
+      }),
+    ).rejects.toThrow("integrity");
+    const entries = await readdir(join(root, "cache", "session-snapshots")).catch(() => []);
+    expect(entries.some((entry) => entry === ref.id || entry.startsWith(`${ref.id}.tmp-`))).toBe(
+      false,
+    );
+  }, 60_000);
+});
+
 function createStore(cacheMaxBytes = 1024 * 1024): S3BaseSnapshotStore {
   return new S3BaseSnapshotStore({
     endpoint: minio.endpoint,
@@ -214,6 +325,13 @@ interface TestManifest {
   readonly artifacts: readonly TestManifestArtifact[];
 }
 
+interface TestSessionManifest {
+  readonly artifacts: readonly {
+    readonly name: "state" | "memory";
+    readonly object: SnapshotObjectRef;
+  }[];
+}
+
 async function manifestFor(snapshot: SnapshotRef): Promise<TestManifest> {
   return JSON.parse(
     (await objectBytes(snapshot.manifest.bucket, snapshot.manifest.key)).toString("utf8"),
@@ -229,4 +347,60 @@ async function objectBytes(bucket: string, key: string): Promise<Buffer> {
 async function expectNoPartialEntry(id: string): Promise<void> {
   const entries = await readdir(join(root, "cache", "snapshots")).catch(() => []);
   expect(entries.some((entry) => entry === id || entry.startsWith(`${id}.tmp-`))).toBe(false);
+}
+
+function sessionCrypto(): SessionSnapshotCrypto {
+  return new SessionSnapshotCrypto(new TestSnapshotKeyBackend(), {
+    backend: "env",
+    backendPath: "TEST_SESSION_SNAPSHOT_KEK",
+    role: "snapshot-kek",
+  });
+}
+
+function createSessionStore(crypto: SessionSnapshotCrypto): S3SessionSnapshotStore {
+  return new S3SessionSnapshotStore({
+    endpoint: minio.endpoint,
+    region: "us-east-1",
+    accessKeyId: minio.accessKeyId,
+    secretAccessKey: minio.secretAccessKey,
+    bucket: `session-snapshots-${Math.random().toString(16).slice(2)}`,
+    cacheDirectory: join(root, "cache"),
+    cacheMaxBytes: 1024 * 1024,
+    manifestKeys: new EnvManifestKeyProvider(keyId, key),
+    crypto,
+  });
+}
+
+function baseResolution(id: string) {
+  return {
+    ref: {
+      id,
+      kind: "base" as const,
+      manifest: {
+        bucket: "base",
+        key: "manifest.json",
+        sha256: "c".repeat(64),
+        sizeBytes: 1,
+      },
+      manifestKeyId: "manifest-key",
+      createdAt: "2026-10-06T00:00:00.000Z",
+    },
+    statePath: "base-state",
+    memoryPath: "base-memory",
+    rootfsPath: "base-rootfs",
+    kernelPath: "base-kernel",
+  };
+}
+
+class TestSnapshotKeyBackend implements SecretBackend {
+  async fetch() {
+    return {
+      kind: "snapshot_kek" as const,
+      keyId: "test-session-root-kek",
+      key: new SecretString(Buffer.alloc(32, 9).toString("base64")),
+    };
+  }
+  async health(): Promise<boolean> {
+    return true;
+  }
 }

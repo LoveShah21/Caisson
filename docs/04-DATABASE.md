@@ -30,6 +30,7 @@ CREATE TABLE sessions (
   driver              TEXT,                       -- firecracker | container
   hardware_isolated   BOOLEAN NOT NULL,
   snapshot_ref        TEXT,
+  base_snapshot_id    UUID,                       -- FK added after snapshots exists
   valid_from          TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at          TIMESTAMPTZ NOT NULL,
   idle_timeout_s      INTEGER NOT NULL DEFAULT 300,
@@ -238,7 +239,12 @@ CREATE TABLE snapshots (
   manifest_key_id TEXT NOT NULL,
   built_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   promoted_at   TIMESTAMPTZ,
-  expires_at    TIMESTAMPTZ
+  expires_at    TIMESTAMPTZ,
+  base_snapshot_id UUID REFERENCES snapshots(id),
+  lineage_session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
+  resume_audit_seq INTEGER,
+  resume_action_id UUID,
+  deletion_state TEXT NOT NULL DEFAULT 'active'
 );
 CREATE INDEX ON snapshots (kind, promoted_at DESC);
 ```
@@ -247,8 +253,26 @@ Each base snapshot is an immutable signed manifest naming compressed state,
 memory, rootfs, and kernel artifacts with their SHA-256 values and sizes. The manifest
 is stored with SSE and authenticated with a host-held HMAC key. Base-snapshot
 promotion is a single transaction updating a pointer row in `settings`, so
-FR-14 holds without a race. Per-session snapshot retention and encryption are
-separate FR-16 work.
+FR-14 holds without a race. Per-session snapshots add `base_snapshot_id` and
+`lineage_session_id`, both required for `kind = 'session'`; restore must match
+the originating session lineage. `resume_audit_seq` and `resume_action_id` are
+captured while the session action gate is held and are immutable suspension
+facts for FR-17b; restore never substitutes the session's then-current audit
+tail. `session_snapshot_keys` stores only the
+session KEK wrapped by the root KEK, its 12-byte nonce, and the root key id.
+`snapshot_keys` stores each snapshot's fresh DEK wrapped by that session KEK.
+Neither table stores a raw key. `snapshot_deletion_outbox` records best-effort
+physical object deletion after the relevant key record has been destroyed.
+Required `CAISSON_SESSION_SNAPSHOT_RETENTION_MS` and
+`CAISSON_SESSION_SNAPSHOT_RETENTION_COUNT` settings are enforced by the
+session-snapshot service, not a database default. Required
+`CAISSON_SESSION_SNAPSHOT_DRAIN_TIMEOUT_MS` bounds how long capture waits for
+already-authorized actions to reach durable terminal audit records.
+
+Firecracker session creation also pins the then-active base snapshot in
+`sessions.base_snapshot_id`. Scheduled capture reads this immutable value, not
+the mutable `settings.active_base_snapshot` pointer, so a later base promotion
+cannot change a running session's restore lineage.
 
 ### 1.9 settings
 

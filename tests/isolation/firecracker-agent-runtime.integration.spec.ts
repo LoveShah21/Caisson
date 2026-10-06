@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { accessSync, constants } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -12,8 +14,12 @@ import {
   PostgresAdapter,
 } from "../../apps/broker/src/index.js";
 import {
+  SessionActionGate,
   SessionIdentityResolver,
+  SessionSnapshotCrypto,
+  SessionSnapshotService,
   SessionTokenService,
+  type SessionSnapshotStore,
 } from "../../apps/control-plane/src/index.js";
 import {
   AuditOutboxWriter,
@@ -23,10 +29,14 @@ import {
 import {
   callRuntimeDiagnostic,
   FirecrackerDriver,
+  type LocalSnapshot,
   type PreparedSandbox,
+  type ResolvedSnapshot,
+  type SnapshotRef,
 } from "../../packages/isolation/src/index.js";
 import { PolicyBundleLoader } from "../../packages/policy/src/index.js";
-import { EnvSecretBackend } from "../../packages/secrets/src/index.js";
+import { EnvSecretBackend, SecretString } from "../../packages/secrets/src/index.js";
+import type { SecretBackend } from "../../packages/secrets/src/types.js";
 import { type ClickHouseFixture, createClickHouseFixture } from "../helpers/clickhouse.js";
 import { createPostgresFixture, type PostgresFixture } from "../helpers/postgres.js";
 
@@ -37,6 +47,7 @@ const kvmEnabled =
   rootfsPath !== "" &&
   hasKvmAccess();
 const sessionId = "018f0000-0000-7000-8000-000000000901";
+const baseSnapshotId = "018f0000-0000-7000-8000-000000000902";
 const credentialCanary = "AKIAAGENTRUNTIME0000";
 const bootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init";
 const readinessRequest = {
@@ -59,6 +70,8 @@ describe("Firecracker M-3 agent runtime", () => {
   let identities: SessionIdentityResolver;
   let broker: BrokerPipeline;
   let localTools: LocalToolPipeline;
+  let actionGate: SessionActionGate;
+  let tokenId: string;
 
   beforeAll(async () => {
     if (!kvmEnabled) return;
@@ -91,6 +104,15 @@ describe("Firecracker M-3 agent runtime", () => {
         '2026-12-31T00:00:00Z'
       )
     `;
+    await postgres.sql`
+      INSERT INTO snapshots (
+        id, kind, bucket, manifest_key, manifest_sha256, manifest_size_bytes,
+        manifest_key_id, built_at
+      ) VALUES (
+        ${baseSnapshotId}, 'base', 'test', 'base/manifest.json', ${"a".repeat(64)}, 1,
+        'test-manifest-key', now()
+      )
+    `;
     adapter = new PostgresAdapter({
       statementTimeoutMs: 1_000,
       rowLimit: 10,
@@ -115,16 +137,38 @@ describe("Firecracker M-3 agent runtime", () => {
       caissonEnvironment: "development",
     });
     const policyBundles = new PolicyBundleLoader(postgres.sql);
-    broker = new BrokerPipeline({ identities, services, policyBundles, secrets, audit });
+    actionGate = new SessionActionGate();
+    broker = new BrokerPipeline({
+      identities,
+      services,
+      policyBundles,
+      secrets,
+      audit,
+      actionGate,
+    });
     localTools = new LocalToolPipeline({
       identities,
       policyBundles,
       audit,
+      actionGate,
       // Deliberately small so the diagnostic completion test proves the host,
       // not the guest, derives a bounded response and audit metadata.
       resultMaxBytes: 128,
       previewMaxBytes: 64,
     });
+    tokenId = (
+      await new SessionTokenService(postgres.sql).mint({
+        sessionId,
+        scopes: [
+          "workspace.read",
+          "workspace.write",
+          "process.exec",
+          "user.ask",
+          "warehouse.readonly",
+        ],
+        expiresAt: new Date("2026-12-31T00:00:00Z"),
+      })
+    ).id;
   }, 90_000);
 
   afterAll(async () => {
@@ -154,20 +198,9 @@ describe("Firecracker M-3 agent runtime", () => {
         oneShotBrokerRequest: readinessRequest,
       });
       const prepared = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);
-      const token = await new SessionTokenService(postgres.sql).mint({
-        sessionId,
-        scopes: [
-          "workspace.read",
-          "workspace.write",
-          "process.exec",
-          "user.ask",
-          "warehouse.readonly",
-        ],
-        expiresAt: new Date("2026-12-31T00:00:00Z"),
-      });
       await identities.bind({
         sessionId,
-        tokenId: token.id,
+        tokenId,
         hostId: prepared.transport.hostId,
         transportKind: prepared.transport.kind,
         peerIdentifier: prepared.transport.peerIdentifier,
@@ -383,7 +416,157 @@ describe("Firecracker M-3 agent runtime", () => {
         expect(serializedRows).not.toContain(credentialCanary);
       } finally {
         await driver.destroy(prepared.handle);
+        await identities.release(prepared.transport);
         await host.release(prepared.transport);
+      }
+    },
+    180_000,
+  );
+
+  it.skipIf(!kvmEnabled)(
+    "captures a concurrent action at its durable suspension point and resumes only after entropy",
+    async () => {
+      const host = new FirecrackerBrokerTransportHost({
+        pipeline: broker,
+        runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
+        localTools: {
+          frameReadTimeoutMs: 5_000,
+          completionTimeoutMs: 5_000,
+          pipeline: localTools,
+        },
+      });
+      const driver = new FirecrackerDriver({
+        firecrackerPath: required("CAISSON_FIRECRACKER_BIN"),
+        kernelImagePath: required("CAISSON_FIRECRACKER_KERNEL"),
+        rootfsPath,
+        runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
+        snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+        bootArgs,
+        oneShotBrokerRequest: readinessRequest,
+      });
+      const source = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);
+      await identities.bind({
+        sessionId,
+        tokenId,
+        hostId: source.transport.hostId,
+        transportKind: source.transport.kind,
+        peerIdentifier: source.transport.peerIdentifier,
+      });
+      const store = new BlockingLocalSnapshotStore(sessionId, baseSnapshotId);
+      const snapshotService = new SessionSnapshotService({
+        sql: postgres.sql,
+        driver,
+        transportHost: host,
+        crypto: new SessionSnapshotCrypto(new KvmSnapshotKeyBackend(), {
+          backend: "env",
+          backendPath: "KVM_SESSION_SNAPSHOT_KEK",
+          role: "snapshot-kek",
+        }),
+        store,
+        baseStore: {
+          resolve: async (ref) => ({
+            ref,
+            statePath: "unused-base-state",
+            memoryPath: "unused-base-memory",
+            rootfsPath,
+            kernelPath: required("CAISSON_FIRECRACKER_KERNEL"),
+          }),
+          release: async () => undefined,
+        },
+        bindRestoredTransport: async (boundSessionId, prepared) =>
+          identities.bind({
+            sessionId: boundSessionId,
+            tokenId,
+            hostId: prepared.transport.hostId,
+            transportKind: prepared.transport.kind,
+            peerIdentifier: prepared.transport.peerIdentifier,
+          }),
+        actionGate,
+        captureDrainTimeoutMs: 5_000,
+        retention: { count: 10, durationMs: 60_000 },
+      });
+      await snapshotService.provisionSessionKey(postgres.sql, sessionId);
+      let restored: PreparedSandbox | undefined;
+      try {
+        await driver.start(source.handle);
+        const runningAction = invoke(host, source, {
+          id: "snapshot-race-action",
+          op: "proc.exec",
+          body: {
+            argv: [
+              "python3",
+              "-c",
+              "import time; time.sleep(0.25); open('/workspace/captured-marker','w').write('captured')",
+            ],
+          },
+        });
+        await waitForAudit(postgres, sessionId, "proc.exec", "action.started");
+        const capture = snapshotService.capture(sessionId, source, baseSnapshotId);
+        const actionResponse = (await runningAction) as {
+          body?: { meta?: { actionId?: string } };
+        };
+        const actionId = actionResponse.body?.meta?.actionId;
+        expect(actionId).toMatch(/^[0-9a-f-]{36}$/iu);
+        await store.waitUntilStoreStarted();
+
+        const deniedDuringCommit = await invoke(host, source, {
+          id: "snapshot-gate-write",
+          op: "fs.write",
+          body: { path: "/workspace/must-not-exist", content: "blocked" },
+        });
+        expect(deniedDuringCommit).toMatchObject({
+          ok: false,
+          error: { code: "SESSION_SUSPENDED" },
+        });
+        store.releaseStore();
+        const ref = await capture;
+        const [point] = await postgres.sql<
+          { resume_audit_seq: number; resume_action_id: string }[]
+        >`
+          SELECT resume_audit_seq, resume_action_id FROM snapshots WHERE id = ${ref.id}
+        `;
+        expect(point?.resume_action_id).toBe(actionId);
+
+        await driver.destroy(source.handle);
+        await identities.release(source.transport);
+        await host.release(source.transport);
+        restored = await snapshotService.restore(ref, sessionId, {
+          id: randomUUID(),
+          image: "agent-runtime",
+        });
+        const capturedMarker = await invoke(host, restored, {
+          id: "snapshot-read-captured-marker",
+          op: "fs.read",
+          body: { path: "/workspace/captured-marker" },
+        });
+        expect(capturedMarker).toMatchObject({
+          ok: true,
+          body: { result: { content: "captured" } },
+        });
+        const deniedMarker = await invoke(host, restored, {
+          id: "snapshot-read-denied-marker",
+          op: "fs.read",
+          body: { path: "/workspace/must-not-exist" },
+        });
+        expect(deniedMarker).toMatchObject({ ok: false });
+        const restoredLog = await readFile(
+          join(required("CAISSON_FIRECRACKER_RUNTIME_DIR"), restored.handle.id, "firecracker.log"),
+          "utf8",
+        );
+        const entropyIndex = restoredLog.lastIndexOf("caisson runtime: entropy refreshed");
+        const resumeIndex = restoredLog.lastIndexOf("caisson runtime: resume accepted");
+        expect(entropyIndex).toBeGreaterThanOrEqual(0);
+        expect(resumeIndex).toBeGreaterThan(entropyIndex);
+      } finally {
+        if (restored !== undefined) {
+          await driver.destroy(restored.handle);
+          await identities.release(restored.transport);
+          await host.release(restored.transport);
+        } else {
+          await driver.destroy(source.handle).catch(() => undefined);
+          await identities.release(source.transport).catch(() => undefined);
+          await host.release(source.transport).catch(() => undefined);
+        }
       }
     },
     180_000,
@@ -446,5 +629,100 @@ function hasKvmAccess(): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function waitForAudit(
+  postgres: PostgresFixture,
+  targetSessionId: string,
+  method: string,
+  eventType: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [row] = await postgres.sql<{ found: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM audit_outbox
+        WHERE session_id = ${targetSessionId}
+          AND payload->>'method' = ${method}
+          AND payload->>'eventType' = ${eventType}
+      ) AS found
+    `;
+    if (row?.found === true) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`audit event did not appear: ${method} ${eventType}`);
+}
+
+class BlockingLocalSnapshotStore implements SessionSnapshotStore {
+  readonly #sessionId: string;
+  readonly #baseSnapshotId: string;
+  #local: LocalSnapshot | undefined;
+  #startedResolve!: () => void;
+  readonly #started = new Promise<void>((resolve) => (this.#startedResolve = resolve));
+  #releaseResolve!: () => void;
+  readonly #release = new Promise<void>((resolve) => (this.#releaseResolve = resolve));
+
+  constructor(sessionId: string, baseSnapshotId: string) {
+    this.#sessionId = sessionId;
+    this.#baseSnapshotId = baseSnapshotId;
+  }
+
+  async store(local: LocalSnapshot): Promise<SnapshotRef> {
+    this.#local = local;
+    this.#startedResolve();
+    await this.#release;
+    return {
+      id: local.id,
+      kind: "session",
+      manifest: {
+        bucket: "kvm-local",
+        key: `${local.id}/manifest.json`,
+        sha256: "d".repeat(64),
+        sizeBytes: 1,
+      },
+      manifestKeyId: "kvm-local",
+      createdAt: local.createdAt,
+      sessionId: this.#sessionId,
+      baseSnapshotId: this.#baseSnapshotId,
+    };
+  }
+
+  async resolve(ref: SnapshotRef, input: { base: ResolvedSnapshot }): Promise<ResolvedSnapshot> {
+    const local = this.#local;
+    if (local === undefined || local.id !== ref.id)
+      throw new Error("local snapshot is unavailable");
+    return {
+      ref,
+      statePath: local.statePath,
+      memoryPath: local.memoryPath,
+      rootfsPath: input.base.rootfsPath,
+      kernelPath: input.base.kernelPath,
+    };
+  }
+
+  async deleteObjects(): Promise<void> {}
+
+  waitUntilStoreStarted(): Promise<void> {
+    return this.#started;
+  }
+
+  releaseStore(): void {
+    this.#releaseResolve();
+  }
+}
+
+class KvmSnapshotKeyBackend implements SecretBackend {
+  readonly #key = randomBytes(32).toString("base64");
+
+  async fetch() {
+    return {
+      kind: "snapshot_kek" as const,
+      keyId: "kvm-test-root-kek",
+      key: new SecretString(this.#key),
+    };
+  }
+
+  async health(): Promise<boolean> {
+    return true;
   }
 }

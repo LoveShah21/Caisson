@@ -7,7 +7,11 @@ import { promisify } from "node:util";
 import postgres from "postgres";
 import { z } from "zod";
 import { BrokerPipeline, DatabaseBrokerServiceResolver } from "../apps/broker/dist/index.js";
-import { SessionIdentityResolver, SessionTokenService } from "../apps/control-plane/dist/index.js";
+import {
+  SessionActionGate,
+  SessionIdentityResolver,
+  SessionTokenService,
+} from "../apps/control-plane/dist/index.js";
 import { AuditOutboxWriter, ClickHouseAuditSink } from "../packages/audit/dist/index.js";
 import { PolicyBundleLoader } from "../packages/policy/dist/index.js";
 import { EnvSecretBackend } from "../packages/secrets/dist/index.js";
@@ -111,6 +115,7 @@ const secrets = new EnvSecretBackend({
   caissonEnvironment: "development",
 });
 const pipeline = new BrokerPipeline({
+  actionGate: new SessionActionGate(),
   identities: {
     resolve: (...arguments_) =>
       measureAsync("identity.resolve", () => identities.resolve(...arguments_)),

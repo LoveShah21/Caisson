@@ -1,2 +1,3 @@
 # Runtime-created artifacts. These are not static rootfs files.
 /run/caisson/agent.sock
+/run/caisson/resume.json

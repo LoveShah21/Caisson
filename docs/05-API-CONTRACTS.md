@@ -221,7 +221,7 @@ A token value, a credential, an approval nonce, another session's identifier, or
 ```ts
 interface IsolationDriver {
   prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
-  start(handle: SandboxHandle): Promise<void>;
+  start(handle: SandboxHandle, options?: { resume?: { lastAuditSeq: number; lastActionId: string; resumedAt: string } }): Promise<void>;
   exec(h: SandboxHandle, req: ExecRequest): Promise<ExecResult>;
   snapshot(h: SandboxHandle, kind: 'base' | 'session'): Promise<LocalSnapshot>;
   restore(ref: ResolvedSnapshot, spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
@@ -235,7 +235,31 @@ interface SnapshotRef {
   manifest: { bucket: string; key: string; versionId?: string; sha256: string; sizeBytes: number };
   manifestKeyId: string;
   createdAt: string;
+  sessionId?: string;       // required only for kind: 'session'
+  baseSnapshotId?: string;  // required only for kind: 'session'
 }
+
+For `kind: 'session'`, `sessionId` and `baseSnapshotId` are required and
+host-derived. A resolver rejects a snapshot before I/O when either differs from
+the requesting session or immutable base lineage. Session artifacts are
+AES-256-GCM encrypted under per-snapshot DEKs wrapped by a per-session KEK;
+neither key reaches the guest.
+
+Before a session snapshot, `SessionActionGate` closes broker and local-tool
+admission synchronously, then waits at most the required
+`CAISSON_SESSION_SNAPSHOT_DRAIN_TIMEOUT_MS` for existing actions to reach a
+durable terminal audit record. New calls receive `SESSION_SUSPENDED` plus a
+durable `action.denied` record; they are not queued. Timeout aborts without a
+restorable snapshot. The exclusive hold includes artifact capture and upload,
+DEK wrapping, and the database commit that stores the wrapped DEK together with
+`resume_audit_seq` and `resume_action_id`.
+
+After restore, port 1028 carries one bounded newline-terminated JSON resume
+control object `{ lastAuditSeq, lastActionId, resumedAt }`. This control socket
+is exposed only after the ADR-24 entropy acknowledgement. The guest validates
+the object, persists it only in `/run/caisson/resume.json`, and replies
+`RESUME_OK\n`; any invalid object returns `RESUME_ERROR\n`. `start()` does not
+resolve and the session cannot become ready without the acknowledgement.
 
 interface LocalSnapshot {
   id: string;

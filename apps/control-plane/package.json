@@ -22,6 +22,7 @@
     "@caisson/isolation": "workspace:*",
     "@caisson/policy": "workspace:*",
     "@caisson/protocol": "workspace:*",
+    "@caisson/secrets": "workspace:*",
     "@caisson/telemetry": "workspace:*",
     "argon2": "^0.45.1",
     "fastify": "^5.12.5",

@@ -21,6 +21,7 @@ import type {
   ResolvedSnapshot,
   SandboxHandle,
   SandboxSpec,
+  StartOptions,
   TransportAttachment,
   TransportDescriptor,
   TransportHost,
@@ -28,6 +29,7 @@ import type {
 import { CAISSON_INFRA_PROBE_PORT } from "./vsock-infrastructure-probe.js";
 
 const CAISSON_RUNTIME_ENTROPY_PORT = 1025;
+const CAISSON_RUNTIME_RESUME_PORT = 1028;
 
 const DEFAULT_BOOT_ARGS = "console=ttyS0 reboot=k panic=1 pci=off";
 const DEFAULT_GUEST_READY_TIMEOUT_MS = 30_000;
@@ -88,6 +90,85 @@ async function refreshRuntimeEntropy(vsockPath: string): Promise<void> {
     undefined,
     lastError,
   );
+}
+
+async function sendRuntimeResume(
+  vsockPath: string,
+  resume: NonNullable<StartOptions["resume"]>,
+): Promise<void> {
+  const deadline = performance.now() + DEFAULT_GUEST_READY_TIMEOUT_MS;
+  let lastError: unknown;
+  while (performance.now() < deadline) {
+    try {
+      await sendRuntimeResumeOnce(
+        vsockPath,
+        resume,
+        Math.max(1, Math.round(deadline - performance.now())),
+      );
+      return;
+    } catch (error: unknown) {
+      lastError = error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new CaissonError(
+    "SANDBOX_FAILED",
+    "guest resume confirmation timed out",
+    undefined,
+    lastError,
+  );
+}
+
+async function sendRuntimeResumeOnce(
+  vsockPath: string,
+  resume: NonNullable<StartOptions["resume"]>,
+  timeoutMs: number,
+): Promise<void> {
+  const payload = Buffer.from(JSON.stringify(resume), "utf8");
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.createConnection(vsockPath);
+    let reply = "";
+    let sent = false;
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const timer = setTimeout(
+      () => finish(new Error("guest resume acknowledgement timed out")),
+      timeoutMs,
+    );
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write(`CONNECT ${CAISSON_RUNTIME_RESUME_PORT}\n`));
+    socket.on("data", (chunk: string) => {
+      reply += chunk;
+      const newline = reply.indexOf("\n");
+      if (newline === -1) return;
+      if (!/^OK \d+$/u.test(reply.slice(0, newline))) {
+        finish(new Error("Firecracker resume CONNECT was rejected"));
+        return;
+      }
+      const rest = reply.slice(newline + 1);
+      if (!sent) {
+        sent = true;
+        socket.write(Buffer.concat([payload, Buffer.from("\n")]));
+        return;
+      }
+      if (rest.includes("RESUME_OK\n")) {
+        finish();
+        return;
+      }
+      if (rest.includes("RESUME_ERROR\n")) finish(new Error("guest rejected resume control"));
+    });
+    socket.once("error", (error) => finish(error));
+    socket.once("close", () => {
+      if (!settled) finish(new Error("guest resume connection closed"));
+    });
+  });
 }
 
 class EntropyConnectionError extends Error {
@@ -286,17 +367,34 @@ export class FirecrackerDriver implements IsolationDriver {
     }
   }
 
-  async start(handle: SandboxHandle): Promise<void> {
+  async start(handle: SandboxHandle, options?: StartOptions): Promise<void> {
     const record = this.#getRecord(handle);
     if (record.restored) {
       await this.#callApi(record, "PATCH", "/vm", { state: "Resumed" });
     } else {
       await this.#callApi(record, "PUT", "/actions", { action_type: "InstanceStart" });
     }
-    if (this.#options.oneShotBrokerRequest !== undefined) {
+    if (
+      this.#options.oneShotBrokerRequest !== undefined ||
+      this.#options.rootfsPath.includes("agent-runtime")
+    ) {
       await refreshRuntimeEntropy(record.vsockPath);
     } else {
       await this.#waitForGuestReady(record);
+    }
+    if (options?.resume !== undefined) {
+      if (!record.restored) {
+        throw new CaissonError(
+          "SANDBOX_FAILED",
+          "resume control is valid only after snapshot restore",
+        );
+      }
+      await sendRuntimeResume(record.vsockPath, options.resume);
+    } else if (record.restored && this.#options.rootfsPath.includes("agent-runtime")) {
+      throw new CaissonError(
+        "SANDBOX_FAILED",
+        "restored agent runtime requires durable resume context",
+      );
     }
   }
 

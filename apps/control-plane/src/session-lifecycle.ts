@@ -15,11 +15,12 @@ import {
   type SessionFailureReason,
   type SessionStatus,
 } from "@caisson/protocol";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import { createSessionTokenRecord, uuidV7 } from "./session-identity.js";
 
 const DEFAULT_START_TIMEOUT_MS = 30_000;
+const SESSION_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1_000;
 
 interface SessionRow {
   readonly id: string;
@@ -36,6 +37,7 @@ interface SessionRow {
   readonly expires_at: Date;
   readonly last_activity_at: Date;
   readonly failure_reason: SessionFailureReason | null;
+  readonly base_snapshot_id: string | null;
   readonly action_allow_count: number;
   readonly action_deny_count: number;
   readonly action_require_approval_count: number;
@@ -57,6 +59,13 @@ export interface SessionLifecycleOptions {
   readonly driver: IsolationDriver;
   readonly transportHost: TransportHost;
   readonly audit: AuditOutboxWriter;
+  /** Required ADR-48 key hierarchy provisioned in the creation transaction. */
+  readonly sessionSnapshotKeys: {
+    provisionSessionKey(transaction: Sql | TransactionSql, sessionId: string): Promise<void>;
+    capture(sessionId: string, prepared: PreparedSandbox, baseSnapshotId: string): Promise<unknown>;
+    eraseSession(sessionId: string): Promise<void>;
+    retryPhysicalDeletion(): Promise<void>;
+  };
   readonly websocketBaseUrl: string;
   readonly startTimeoutMs?: number;
   readonly now?: () => Date;
@@ -67,18 +76,21 @@ export class SessionLifecycleService {
   readonly #driver: IsolationDriver;
   readonly #transportHost: TransportHost;
   readonly #audit: AuditOutboxWriter;
+  readonly #sessionSnapshotKeys: SessionLifecycleOptions["sessionSnapshotKeys"];
   readonly #websocketBaseUrl: string;
   readonly #startTimeoutMs: number;
   readonly #now: () => Date;
   readonly #prepared = new Map<string, PreparedRuntime>();
   readonly #startup = new Map<string, Promise<void>>();
   readonly #locks = new Map<string, Promise<void>>();
+  readonly #lastSessionSnapshotAt = new Map<string, number>();
 
   constructor(options: SessionLifecycleOptions) {
     this.#sql = options.sql;
     this.#driver = options.driver;
     this.#transportHost = options.transportHost;
     this.#audit = options.audit;
+    this.#sessionSnapshotKeys = options.sessionSnapshotKeys;
     this.#websocketBaseUrl = options.websocketBaseUrl.replace(/\/$/, "");
     this.#startTimeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
@@ -93,22 +105,25 @@ export class SessionLifecycleService {
       { id: sessionId, image: request.agent.image, entrypoint: request.agent.entrypoint },
       this.#transportHost,
     );
-
     try {
+      const baseSnapshotId =
+        prepared.handle.driver === "firecracker" ? await this.#activeBaseSnapshotId() : null;
       await this.#sql.begin(async (transaction) => {
         await transaction`
           INSERT INTO sessions (
             id, status, agent_image, entrypoint, approval_mode, scopes, policy_bundle_id,
             requested_by, purpose, metadata, host_id, driver, hardware_isolated,
-            expires_at, idle_timeout_s
+            expires_at, idle_timeout_s, base_snapshot_id
           ) VALUES (
             ${sessionId}, 'booting', ${request.agent.image}, ${request.agent.entrypoint},
             ${request.approvalMode}, ${[...request.scopes]}, ${policyBundleId},
             ${request.requestedBy}, ${request.purpose ?? null}, ${transaction.json(request.metadata)}::jsonb,
             ${prepared.transport.hostId}, ${prepared.handle.driver},
-            ${this.#driver.capabilities().hardwareIsolation}, ${expiresAt}, ${request.idleTimeoutSeconds}
+            ${this.#driver.capabilities().hardwareIsolation}, ${expiresAt}, ${request.idleTimeoutSeconds},
+            ${baseSnapshotId}
           )
         `;
+        await this.#sessionSnapshotKeys.provisionSessionKey(transaction, sessionId);
         await transaction`
           INSERT INTO session_tokens (id, session_id, token_hash, scopes, expires_at)
           VALUES (${token.id}, ${sessionId}, ${token.tokenHash}, ${[...request.scopes]}, ${expiresAt})
@@ -183,10 +198,11 @@ export class SessionLifecycleService {
         return { sessionId, status: session.status };
       }
 
+      const keysErased = await this.#tryEraseSessionKeys(sessionId);
       const revoked = await this.#tryRevokeToken(sessionId, "terminated");
       const runtime = await this.#runtimeFor(session);
       const destroyed = await this.#tryDestroy(runtime.handle);
-      if (!revoked || !destroyed) {
+      if (!keysErased || !revoked || !destroyed) {
         await this.#markFailed(session, "cleanup_pending", "destroy_failed");
         return { sessionId, status: "failed" };
       }
@@ -244,9 +260,11 @@ export class SessionLifecycleService {
               return;
             }
             const runtime = await this.#runtimeFor(current);
+            const keysErased = await this.#tryEraseSessionKeys(current.id);
             const revoked = await this.#tryRevokeToken(current.id, "failed");
             const destroyed = await this.#tryDestroy(runtime.handle);
             if (
+              !keysErased ||
               !revoked ||
               !destroyed ||
               !(await this.#tryRelease(current.id, runtime.transport))
@@ -266,6 +284,26 @@ export class SessionLifecycleService {
   async reconcile(): Promise<void> {
     await this.reconcileBooting();
     await this.reconcileCleanup();
+    await this.#captureDueSessionSnapshots();
+    await this.#sessionSnapshotKeys.retryPhysicalDeletion();
+  }
+
+  async #captureDueSessionSnapshots(): Promise<void> {
+    const sessions = await this.#sql<{ id: string; base_snapshot_id: string | null }[]>`
+      SELECT id, base_snapshot_id FROM sessions WHERE status = 'active'
+    `;
+    const now = this.#now().getTime();
+    await Promise.all(
+      sessions.map(async ({ id, base_snapshot_id: baseSnapshotId }) => {
+        if (baseSnapshotId === null) return;
+        const previous = this.#lastSessionSnapshotAt.get(id);
+        if (previous !== undefined && previous + SESSION_SNAPSHOT_INTERVAL_MS > now) return;
+        const runtime = this.#prepared.get(id);
+        if (runtime === undefined) return;
+        await this.#sessionSnapshotKeys.capture(id, runtime, baseSnapshotId);
+        this.#lastSessionSnapshotAt.set(id, now);
+      }),
+    );
   }
 
   async waitForStartup(sessionId: string): Promise<void> {
@@ -403,6 +441,15 @@ export class SessionLifecycleService {
     }
   }
 
+  async #tryEraseSessionKeys(sessionId: string): Promise<boolean> {
+    try {
+      await this.#sessionSnapshotKeys.eraseSession(sessionId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async #runtimeFor(session: SessionRow): Promise<PreparedRuntime> {
     const live = this.#prepared.get(session.id);
     if (live !== undefined) {
@@ -432,7 +479,7 @@ export class SessionLifecycleService {
       SELECT id, status, agent_image, entrypoint, scopes, requested_by, purpose,
              policy_bundle_id, driver, hardware_isolated, created_at, expires_at,
              last_activity_at, failure_reason, action_allow_count, action_deny_count,
-             action_require_approval_count
+             action_require_approval_count, base_snapshot_id
       FROM sessions WHERE id = ${sessionId}
     `;
     if (session === undefined) {
@@ -466,6 +513,28 @@ export class SessionLifecycleService {
       throw new CaissonError("POLICY_UNAVAILABLE", "no active policy bundle is configured");
     }
     return value.policyBundleId;
+  }
+
+  async #activeBaseSnapshotId(): Promise<string> {
+    const [setting] = await this.#sql<{ value: unknown }[]>`
+      SELECT value FROM settings WHERE key = 'active_base_snapshot'
+    `;
+    const value = setting?.value;
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      !("snapshotId" in value) ||
+      typeof value.snapshotId !== "string"
+    ) {
+      throw new CaissonError("SANDBOX_FAILED", "no active base snapshot is configured");
+    }
+    const [snapshot] = await this.#sql<{ id: string }[]>`
+      SELECT id FROM snapshots WHERE id = ${value.snapshotId} AND kind = 'base'
+    `;
+    if (snapshot === undefined) {
+      throw new CaissonError("SANDBOX_FAILED", "active base snapshot is unavailable");
+    }
+    return snapshot.id;
   }
 
   async #tryDestroy(handle: SandboxHandle): Promise<boolean> {

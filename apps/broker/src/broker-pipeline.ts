@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { AuditOutboxWriter } from "@caisson/audit";
-import type { SessionIdentityResolver, TransportPeer } from "@caisson/control-plane";
+import type {
+  SessionActionGate,
+  SessionIdentityResolver,
+  TransportPeer,
+} from "@caisson/control-plane";
 import type { PolicyBundleLoader } from "@caisson/policy";
 import {
   type BrokerCallRequest,
@@ -52,6 +56,7 @@ export interface BrokerPipelineOptions {
   readonly policyBundles: PolicyBundleLoader;
   readonly secrets: SecretBackend;
   readonly audit: AuditOutboxWriter;
+  readonly actionGate: SessionActionGate;
 }
 
 export class BrokerPipeline {
@@ -60,6 +65,7 @@ export class BrokerPipeline {
   readonly #policyBundles: PolicyBundleLoader;
   readonly #secrets: SecretBackend;
   readonly #audit: AuditOutboxWriter;
+  readonly #actionGate: SessionActionGate;
 
   constructor(options: BrokerPipelineOptions) {
     this.#identities = options.identities;
@@ -67,6 +73,7 @@ export class BrokerPipeline {
     this.#policyBundles = options.policyBundles;
     this.#secrets = options.secrets;
     this.#audit = options.audit;
+    this.#actionGate = options.actionGate;
   }
 
   async handle(peer: TransportPeer, frame: unknown): Promise<BrokerCallResponse> {
@@ -84,161 +91,195 @@ export class BrokerPipeline {
     return runInSpan(SPAN_NAMES.brokerCall, async (span) => {
       const startedAt = performance.now();
       const identity = await this.#identities.resolve(peer);
-      const service = await this.#services.resolveService(request.body.service);
-      const method = service.adapter.methods[request.body.method];
-      if (method === undefined)
-        throw new CaissonError("METHOD_NOT_FOUND", "broker method is unavailable");
-      const params = method.params.safeParse(request.body.params);
-      if (!params.success) throw new CaissonError("PARAMS_INVALID", "invalid adapter parameters");
-      const scopeUsed = resolveValue(method.scopeRequired, params.data);
-      const sideEffecting = resolveValue(method.sideEffecting, params.data);
-      const actionId = randomUUID();
-      span.setAttribute(ATTRIBUTE_KEYS.sessionId, identity.sessionId);
-      span.setAttribute(ATTRIBUTE_KEYS.service, service.adapter.name);
-      span.setAttribute(ATTRIBUTE_KEYS.method, request.body.method);
-      span.setAttribute(ATTRIBUTE_KEYS.actionId, actionId);
-      span.setAttribute(ATTRIBUTE_KEYS.scopeUsed, scopeUsed);
-
-      const bundle = await this.#policyBundles.load(identity.policyBundleId);
-      const now = new Date();
-      const decision = bundle.evaluator.evaluate({
-        session: {
-          id: identity.sessionId,
-          roles: identity.roles,
-          scopes: identity.scopes,
-          approvalMode: identity.approvalMode,
-          expiresAt: identity.expiresAt.toISOString(),
-          validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
-          requestedBy: identity.requestedBy,
-          purpose: identity.purpose,
-        },
-        action: {
-          service: service.adapter.name,
-          method: request.body.method,
-          sideEffecting,
-          scopeRequired: scopeUsed,
-          params: params.data,
-        },
-        context: {
-          now: now.toISOString(),
-          hardwareIsolated: identity.hardwareIsolated,
-          actionCountThisMethod: 0,
-        },
-      });
-      span.setAttribute(ATTRIBUTE_KEYS.decision, decision.decision);
-      const obligationContext = resolveObligations(decision.obligations);
-      if (decision.decision !== "allow") {
+      const lease = this.#actionGate.enter(identity.sessionId);
+      if (lease === undefined) {
+        const actionId = randomUUID();
         await this.#audit.persistDurably(
           auditInput({
             identity,
             actionId,
             request,
             eventType: "action.denied",
-            decision: decision.decision,
-            policyBundle: bundle.id,
-            policyReason: decision.reason,
-            obligations: decision.obligations,
-            scopeUsed,
+            decision: "deny",
+            policyBundle: identity.policyBundleId,
+            policyReason: "session snapshot capture is active",
+            scopeUsed: "",
             durationMs: Math.round(performance.now() - startedAt),
+            errorCode: "SESSION_SUSPENDED",
+            errorMessage: "session snapshot capture is active",
           }),
         );
         return {
           id: request.id,
           ok: false,
           error: {
-            code: decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
-            message: decision.reason,
-            details: { scopeRequired: scopeUsed },
-            actionId,
-          },
-        };
-      }
-
-      await this.#audit.persistBeforeExecution(
-        auditInput({
-          identity,
-          actionId,
-          request,
-          eventType: "action.started",
-          decision: "allow",
-          policyBundle: bundle.id,
-          policyReason: decision.reason,
-          obligations: decision.obligations,
-          scopeUsed,
-        }),
-      );
-      try {
-        const credentialRef = await this.#services.resolveCredentialRef(
-          request.body.service,
-          obligationContext.role,
-        );
-        const credentials =
-          credentialRef === undefined ? undefined : await this.#secrets.fetch(credentialRef);
-        const result = await method.execute(credentials, params.data, {
-          timeoutMs: service.timeoutMs,
-        });
-        const encoded = JSON.stringify(result);
-        await this.#audit.persistDurably(
-          auditInput({
-            identity,
-            actionId,
-            request,
-            eventType: "action.completed",
-            decision: "allow",
-            policyBundle: bundle.id,
-            policyReason: decision.reason,
-            obligations: decision.obligations,
-            scopeUsed,
-            durationMs: Math.round(performance.now() - startedAt),
-            resultBytes: Buffer.byteLength(encoded),
-            resultHash: sha256(encoded),
-          }),
-        );
-        return BrokerCallResponseSchema.parse({
-          id: request.id,
-          ok: true,
-          body: {
-            result: JSON.parse(encoded),
-            meta: {
-              durationMs: Math.round(performance.now() - startedAt),
-              redactionCount: 0,
-              roleUsed: obligationContext.role,
-              actionId,
-              truncated: resultIsTruncated(result),
-            },
-          },
-        });
-      } catch (error: unknown) {
-        const caisson =
-          error instanceof CaissonError
-            ? error
-            : new CaissonError("SERVICE_ERROR", "service call failed", undefined, error);
-        await this.#audit.persistDurably(
-          auditInput({
-            identity,
-            actionId,
-            request,
-            eventType: "action.failed",
-            decision: "allow",
-            policyBundle: bundle.id,
-            policyReason: decision.reason,
-            obligations: decision.obligations,
-            scopeUsed,
-            durationMs: Math.round(performance.now() - startedAt),
-            errorCode: caisson.code,
-            errorMessage: caisson.message,
-          }),
-        );
-        return {
-          id: request.id,
-          ok: false,
-          error: {
-            code: caisson.code,
-            message: caisson.message.slice(0, 512),
+            code: "SESSION_SUSPENDED",
+            message: "session snapshot capture is active",
             details: {},
             actionId,
           },
         };
+      }
+      try {
+        const service = await this.#services.resolveService(request.body.service);
+        const method = service.adapter.methods[request.body.method];
+        if (method === undefined)
+          throw new CaissonError("METHOD_NOT_FOUND", "broker method is unavailable");
+        const params = method.params.safeParse(request.body.params);
+        if (!params.success) throw new CaissonError("PARAMS_INVALID", "invalid adapter parameters");
+        const scopeUsed = resolveValue(method.scopeRequired, params.data);
+        const sideEffecting = resolveValue(method.sideEffecting, params.data);
+        const actionId = randomUUID();
+        span.setAttribute(ATTRIBUTE_KEYS.sessionId, identity.sessionId);
+        span.setAttribute(ATTRIBUTE_KEYS.service, service.adapter.name);
+        span.setAttribute(ATTRIBUTE_KEYS.method, request.body.method);
+        span.setAttribute(ATTRIBUTE_KEYS.actionId, actionId);
+        span.setAttribute(ATTRIBUTE_KEYS.scopeUsed, scopeUsed);
+
+        const bundle = await this.#policyBundles.load(identity.policyBundleId);
+        const now = new Date();
+        const decision = bundle.evaluator.evaluate({
+          session: {
+            id: identity.sessionId,
+            roles: identity.roles,
+            scopes: identity.scopes,
+            approvalMode: identity.approvalMode,
+            expiresAt: identity.expiresAt.toISOString(),
+            validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
+            requestedBy: identity.requestedBy,
+            purpose: identity.purpose,
+          },
+          action: {
+            service: service.adapter.name,
+            method: request.body.method,
+            sideEffecting,
+            scopeRequired: scopeUsed,
+            params: params.data,
+          },
+          context: {
+            now: now.toISOString(),
+            hardwareIsolated: identity.hardwareIsolated,
+            actionCountThisMethod: 0,
+          },
+        });
+        span.setAttribute(ATTRIBUTE_KEYS.decision, decision.decision);
+        const obligationContext = resolveObligations(decision.obligations);
+        if (decision.decision !== "allow") {
+          await this.#audit.persistDurably(
+            auditInput({
+              identity,
+              actionId,
+              request,
+              eventType: "action.denied",
+              decision: decision.decision,
+              policyBundle: bundle.id,
+              policyReason: decision.reason,
+              obligations: decision.obligations,
+              scopeUsed,
+              durationMs: Math.round(performance.now() - startedAt),
+            }),
+          );
+          return {
+            id: request.id,
+            ok: false,
+            error: {
+              code:
+                decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
+              message: decision.reason,
+              details: { scopeRequired: scopeUsed },
+              actionId,
+            },
+          };
+        }
+
+        await this.#audit.persistBeforeExecution(
+          auditInput({
+            identity,
+            actionId,
+            request,
+            eventType: "action.started",
+            decision: "allow",
+            policyBundle: bundle.id,
+            policyReason: decision.reason,
+            obligations: decision.obligations,
+            scopeUsed,
+          }),
+        );
+        try {
+          const credentialRef = await this.#services.resolveCredentialRef(
+            request.body.service,
+            obligationContext.role,
+          );
+          const credentials =
+            credentialRef === undefined ? undefined : await this.#secrets.fetch(credentialRef);
+          const result = await method.execute(credentials, params.data, {
+            timeoutMs: service.timeoutMs,
+          });
+          const encoded = JSON.stringify(result);
+          await this.#audit.persistDurably(
+            auditInput({
+              identity,
+              actionId,
+              request,
+              eventType: "action.completed",
+              decision: "allow",
+              policyBundle: bundle.id,
+              policyReason: decision.reason,
+              obligations: decision.obligations,
+              scopeUsed,
+              durationMs: Math.round(performance.now() - startedAt),
+              resultBytes: Buffer.byteLength(encoded),
+              resultHash: sha256(encoded),
+            }),
+          );
+          return BrokerCallResponseSchema.parse({
+            id: request.id,
+            ok: true,
+            body: {
+              result: JSON.parse(encoded),
+              meta: {
+                durationMs: Math.round(performance.now() - startedAt),
+                redactionCount: 0,
+                roleUsed: obligationContext.role,
+                actionId,
+                truncated: resultIsTruncated(result),
+              },
+            },
+          });
+        } catch (error: unknown) {
+          const caisson =
+            error instanceof CaissonError
+              ? error
+              : new CaissonError("SERVICE_ERROR", "service call failed", undefined, error);
+          await this.#audit.persistDurably(
+            auditInput({
+              identity,
+              actionId,
+              request,
+              eventType: "action.failed",
+              decision: "allow",
+              policyBundle: bundle.id,
+              policyReason: decision.reason,
+              obligations: decision.obligations,
+              scopeUsed,
+              durationMs: Math.round(performance.now() - startedAt),
+              errorCode: caisson.code,
+              errorMessage: caisson.message,
+            }),
+          );
+          return {
+            id: request.id,
+            ok: false,
+            error: {
+              code: caisson.code,
+              message: caisson.message.slice(0, 512),
+              details: {},
+              actionId,
+            },
+          };
+        }
+      } finally {
+        lease.release();
       }
     });
   }

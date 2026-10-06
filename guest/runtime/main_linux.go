@@ -16,6 +16,7 @@ import (
 
 const brokerPort = 1024
 const entropyPort = 1025
+const resumePort = 1028
 const runtimeFrameMaxBytes = 16 * 1024 * 1024
 const hostCID = 2
 const afVsock = 40
@@ -39,6 +40,14 @@ func main() {
 		fail("entropy control failed")
 	}
 	if agentRuntimeBuild {
+		// Resume control is a host-only message. It is available only after the
+		// first entropy acknowledgement, so a restored runtime cannot serve an
+		// agent before ADR-24 has completed.
+		go func() {
+			if err := serveResumeControl(); err != nil {
+				fail("resume control failed")
+			}
+		}()
 		if diagnosticRuntimeBuild {
 			go func() {
 				if err := serveDiagnostics(); err != nil {
@@ -92,6 +101,63 @@ func main() {
 	// M-2 intentionally has no agent tool surface. Keep PID 1 alive after the
 	// one-shot broker call so a clean base snapshot remains runnable.
 	select {}
+}
+
+type resumeControl struct {
+	LastAuditSeq int    `json:"lastAuditSeq"`
+	LastActionID string `json:"lastActionId"`
+	ResumedAt    string `json:"resumedAt"`
+}
+
+func serveResumeControl() error {
+	fd, err := syscall.Socket(afVsock, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(fd)
+	address := sockaddrVM{Family: afVsock, Port: resumePort, CID: vmaddrCIDAny}
+	_, _, errno := syscall.Syscall(syscall.SYS_BIND, uintptr(fd), uintptr(unsafe.Pointer(&address)), unsafe.Sizeof(address))
+	if errno != 0 {
+		return errno
+	}
+	if err := syscall.Listen(fd, 1); err != nil {
+		return err
+	}
+	for {
+		connection, _, errno := syscall.Syscall(syscall.SYS_ACCEPT, uintptr(fd), 0, 0)
+		if errno != 0 {
+			return errno
+		}
+		go handleResumeControl(int(connection))
+	}
+}
+
+func handleResumeControl(connection int) {
+	defer syscall.Close(connection)
+	reader := bufio.NewReader(io.LimitReader(os.NewFile(uintptr(connection), "resume"), 2049))
+	payload, err := reader.ReadBytes('\n')
+	if err != nil || len(payload) < 2 || len(payload) > 2048 {
+		_, _ = syscall.Write(connection, []byte("RESUME_ERROR\n"))
+		return
+	}
+	payload = payload[:len(payload)-1]
+	var control resumeControl
+	if err := json.Unmarshal(payload, &control); err != nil || control.LastAuditSeq < 1 || control.LastActionID == "" || control.ResumedAt == "" {
+		_, _ = syscall.Write(connection, []byte("RESUME_ERROR\n"))
+		return
+	}
+	// This non-secret state is the truthful handoff to the separate guest agent.
+	// It is runtime tmpfs, not rootfs or a snapshot key/token store.
+	if err := os.WriteFile("/run/caisson/resume.json", payload, 0o600); err != nil {
+		_, _ = syscall.Write(connection, []byte("RESUME_ERROR\n"))
+		return
+	}
+	if err := os.Chown("/run/caisson/resume.json", 65532, 65532); err != nil {
+		_, _ = syscall.Write(connection, []byte("RESUME_ERROR\n"))
+		return
+	}
+	fmt.Fprintln(os.Stderr, "caisson runtime: resume accepted")
+	_, _ = syscall.Write(connection, []byte("RESUME_OK\n"))
 }
 
 func diagnosticPreflightEnabled() bool {
@@ -248,6 +314,9 @@ func mixEntropy(connection int) error {
 		return errno
 	}
 	_, err = syscall.Write(connection, []byte("ENTROPY_OK\n"))
+	if err == nil {
+		fmt.Fprintln(os.Stderr, "caisson runtime: entropy refreshed")
+	}
 	return err
 }
 

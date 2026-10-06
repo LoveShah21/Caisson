@@ -40,6 +40,18 @@ export interface PreparedSandbox {
   readonly transport: TransportDescriptor;
 }
 
+/** Host-derived durable suspension point, never guest-provided. */
+export interface SessionResumeContext {
+  readonly lastAuditSeq: number;
+  readonly lastActionId: string;
+  readonly resumedAt: string;
+}
+
+export interface StartOptions {
+  /** Required for a mid-session restore before the guest may become ready. */
+  readonly resume?: SessionResumeContext;
+}
+
 export interface ExecRequest {
   readonly argv: readonly string[];
   readonly cwd?: string;
@@ -68,6 +80,10 @@ export interface SnapshotRef {
   readonly manifest: SnapshotObjectRef;
   readonly manifestKeyId: string;
   readonly createdAt: string;
+  /** Session snapshots are restoreable only by this originating session. */
+  readonly sessionId?: string;
+  /** Immutable base snapshot that supplies the rootfs/kernel backing path. */
+  readonly baseSnapshotId?: string;
 }
 
 /** Driver-produced local files, not eligible for persistence until stored and verified. */
@@ -93,7 +109,7 @@ export interface ResolvedSnapshot {
 
 export interface IsolationDriver {
   prepare(spec: SandboxSpec, transportHost: TransportHost): Promise<PreparedSandbox>;
-  start(handle: SandboxHandle): Promise<void>;
+  start(handle: SandboxHandle, options?: StartOptions): Promise<void>;
   exec(handle: SandboxHandle, request: ExecRequest): Promise<ExecResult>;
   snapshot(handle: SandboxHandle, kind: "base" | "session"): Promise<LocalSnapshot>;
   restore(

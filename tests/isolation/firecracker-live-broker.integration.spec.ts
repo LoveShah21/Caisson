@@ -10,6 +10,7 @@ import {
   PostgresAdapter,
 } from "../../apps/broker/src/index.js";
 import {
+  SessionActionGate,
   SessionIdentityResolver,
   SessionTokenService,
 } from "../../apps/control-plane/src/index.js";
@@ -103,6 +104,7 @@ describe("INV-1: no secret in a Firecracker guest", () => {
     spanRecorder = createInMemorySpanRecorder();
     initializeTelemetry({ spanProcessors: [spanRecorder.processor] });
     pipeline = new BrokerPipeline({
+      actionGate: new SessionActionGate(),
       identities: new SessionIdentityResolver(postgres.sql),
       services: new DatabaseBrokerServiceResolver(postgres.sql, [adapter]),
       policyBundles: new PolicyBundleLoader(postgres.sql),
