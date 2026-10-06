@@ -1,0 +1,5 @@
+# Pinned HTTPS endpoints from Alpine's official mirror registry.
+# Package bytes remain authenticated by alpine-runtime-packages.lock SHA-256.
+https://dl-cdn.alpinelinux.org/alpine
+https://ap.edge.kernel.org/alpine
+https://mirror.math.princeton.edu/pub/alpinelinux

@@ -7,10 +7,11 @@
 download_with_retry() {
   source_url=$1
   destination=$2
+  maximum_attempts=${3:-5}
   partial="${destination}.part"
   attempt=1
 
-  while [ "$attempt" -le 5 ]; do
+  while [ "$attempt" -le "$maximum_attempts" ]; do
     rm -f "$partial"
     if curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
       --connect-timeout 15 --max-time 300 "$source_url" -o "$partial"; then
@@ -20,7 +21,7 @@ download_with_retry() {
       status=$?
     fi
     rm -f "$partial"
-    if [ "$status" -eq 22 ] || [ "$attempt" -eq 5 ]; then
+    if [ "$status" -eq 22 ] || [ "$attempt" -eq "$maximum_attempts" ]; then
       return "$status"
     fi
     sleep "$attempt"

@@ -9,6 +9,25 @@ trap 'rm -rf "$work"' EXIT
 # shellcheck source=download-with-retry.sh
 . "$root/download-with-retry.sh"
 
+download_alpine_package() {
+  package_relative_path=$1
+  package_destination=$2
+  while IFS= read -r mirror_base; do
+    case "$mirror_base" in
+      ''|'#'*) continue ;;
+      https://*) ;;
+      *)
+        printf '%s\n' "invalid Alpine mirror URL: $mirror_base" >&2
+        return 1
+        ;;
+    esac
+    if download_with_retry "$mirror_base/$package_relative_path" "$package_destination" 2; then
+      return 0
+    fi
+  done < "$root/alpine-package-mirrors.lock"
+  return 1
+}
+
 for command in curl go mkfs.ext4 debugfs grep sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || {
     printf '%s\n' "missing required command: $command" >&2
@@ -40,10 +59,11 @@ while IFS='@' read -r package_name package_version expected_sha256; do
   package_path="$work/packages/$archive"
   if [ -n "${CAISSON_ALPINE_PACKAGE_CACHE:-}" ] && [ -f "$CAISSON_ALPINE_PACKAGE_CACHE/$archive" ]; then
     cp "$CAISSON_ALPINE_PACKAGE_CACHE/$archive" "$package_path"
-  elif ! download_with_retry \
-    "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/$archive" "$package_path"; then
-    download_with_retry \
-      "https://dl-cdn.alpinelinux.org/alpine/v3.21/community/x86_64/$archive" "$package_path"
+  elif ! download_alpine_package "v3.21/main/x86_64/$archive" "$package_path"; then
+    if ! download_alpine_package "v3.21/community/x86_64/$archive" "$package_path"; then
+      printf '%s\n' "locked Alpine package is unavailable from every pinned official mirror: $archive" >&2
+      exit 1
+    fi
   fi
   actual_sha256=$(sha256sum "$package_path" | awk '{ print $1 }')
   if [ "$actual_sha256" != "$expected_sha256" ]; then
