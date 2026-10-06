@@ -6,6 +6,8 @@ output=${1:-"$root/caisson-agent-runtime-rootfs.ext4"}
 build_tags=${CAISSON_AGENT_RUNTIME_BUILD_TAGS:-agent}
 work=${TMPDIR:-/tmp}/caisson-agent-runtime-rootfs-$$
 trap 'rm -rf "$work"' EXIT
+# shellcheck source=download-with-retry.sh
+. "$root/download-with-retry.sh"
 
 for command in curl go mkfs.ext4 debugfs grep sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || {
@@ -38,10 +40,10 @@ while IFS='@' read -r package_name package_version expected_sha256; do
   package_path="$work/packages/$archive"
   if [ -n "${CAISSON_ALPINE_PACKAGE_CACHE:-}" ] && [ -f "$CAISSON_ALPINE_PACKAGE_CACHE/$archive" ]; then
     cp "$CAISSON_ALPINE_PACKAGE_CACHE/$archive" "$package_path"
-  elif ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-    "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/$archive" -o "$package_path"; then
-    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-      "https://dl-cdn.alpinelinux.org/alpine/v3.21/community/x86_64/$archive" -o "$package_path"
+  elif ! download_with_retry \
+    "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/$archive" "$package_path"; then
+    download_with_retry \
+      "https://dl-cdn.alpinelinux.org/alpine/v3.21/community/x86_64/$archive" "$package_path"
   fi
   actual_sha256=$(sha256sum "$package_path" | awk '{ print $1 }')
   if [ "$actual_sha256" != "$expected_sha256" ]; then
