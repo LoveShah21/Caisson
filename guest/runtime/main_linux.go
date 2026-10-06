@@ -43,11 +43,15 @@ func main() {
 		// Resume control is a host-only message. It is available only after the
 		// first entropy acknowledgement, so a restored runtime cannot serve an
 		// agent before ADR-24 has completed.
+		resumeReady := make(chan error, 1)
 		go func() {
-			if err := serveResumeControl(); err != nil {
+			if err := serveResumeControl(resumeReady); err != nil {
 				fail("resume control failed")
 			}
 		}()
+		if err := <-resumeReady; err != nil {
+			fail("resume control failed")
+		}
 		if diagnosticRuntimeBuild {
 			go func() {
 				if err := serveDiagnostics(); err != nil {
@@ -109,20 +113,25 @@ type resumeControl struct {
 	ResumedAt    string `json:"resumedAt"`
 }
 
-func serveResumeControl() error {
+func serveResumeControl(firstReady chan<- error) error {
 	fd, err := syscall.Socket(afVsock, syscall.SOCK_STREAM, 0)
 	if err != nil {
+		firstReady <- err
 		return err
 	}
 	defer syscall.Close(fd)
 	address := sockaddrVM{Family: afVsock, Port: resumePort, CID: vmaddrCIDAny}
 	_, _, errno := syscall.Syscall(syscall.SYS_BIND, uintptr(fd), uintptr(unsafe.Pointer(&address)), unsafe.Sizeof(address))
 	if errno != 0 {
+		firstReady <- errno
 		return errno
 	}
 	if err := syscall.Listen(fd, 1); err != nil {
+		firstReady <- err
 		return err
 	}
+	firstReady <- nil
+	fmt.Fprintln(os.Stderr, "caisson runtime: resume control ready")
 	for {
 		connection, _, errno := syscall.Syscall(syscall.SYS_ACCEPT, uintptr(fd), 0, 0)
 		if errno != 0 {

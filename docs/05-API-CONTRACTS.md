@@ -259,7 +259,12 @@ control object `{ lastAuditSeq, lastActionId, resumedAt }`. This control socket
 is exposed only after the ADR-24 entropy acknowledgement. The guest validates
 the object, persists it only in `/run/caisson/resume.json`, and replies
 `RESUME_OK\n`; any invalid object returns `RESUME_ERROR\n`. `start()` does not
-resolve and the session cannot become ready without the acknowledgement.
+resolve and the session cannot become ready without the acknowledgement. On
+the initial boot, the runtime waits for the resume listener to bind before it
+exposes either the diagnostic control listener or `/run/caisson/agent.sock`.
+Consequently, every guest state eligible for a session snapshot already
+contains a live resume listener; listener startup is not allowed to race
+snapshot capture.
 
 interface LocalSnapshot {
   id: string;
