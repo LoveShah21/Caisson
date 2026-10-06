@@ -488,6 +488,10 @@ describe("Firecracker M-3 agent runtime", () => {
       let restored: PreparedSandbox | undefined;
       try {
         await driver.start(source.handle);
+        const [auditTail] = await postgres.sql<{ seq: number }[]>`
+          SELECT next_audit_seq AS seq FROM sessions WHERE id = ${sessionId}
+        `;
+        if (auditTail === undefined) throw new Error("snapshot test session is unavailable");
         const runningAction = invoke(host, source, {
           id: "snapshot-race-action",
           op: "proc.exec",
@@ -499,7 +503,7 @@ describe("Firecracker M-3 agent runtime", () => {
             ],
           },
         });
-        await waitForAudit(postgres, sessionId, "proc.exec", "action.started");
+        await waitForAudit(postgres, sessionId, "proc.exec", "action.started", auditTail.seq);
         const capture = snapshotService.capture(sessionId, source, baseSnapshotId);
         const actionResponse = (await runningAction) as {
           body?: { meta?: { actionId?: string } };
@@ -649,6 +653,7 @@ async function waitForAudit(
   targetSessionId: string,
   method: string,
   eventType: string,
+  afterSeq = 0,
 ): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const [row] = await postgres.sql<{ found: boolean }[]>`
@@ -657,6 +662,7 @@ async function waitForAudit(
         WHERE session_id = ${targetSessionId}
           AND payload->>'method' = ${method}
           AND payload->>'eventType' = ${eventType}
+          AND seq > ${afterSeq}
       ) AS found
     `;
     if (row?.found === true) return;
