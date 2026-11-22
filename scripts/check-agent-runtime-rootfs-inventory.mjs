@@ -37,7 +37,7 @@ function inventory(directory = "/", prefix = "") {
 const actual = inventory().sort((left, right) => left.path.localeCompare(right.path));
 const rendered = actual.map((entry) => `${entry.mode}\t${entry.path}`).join("\n");
 if (printOnly) {
-  process.stdout.write(`${rendered}\n`);
+  await new Promise((resolveWrite) => process.stdout.write(`${rendered}\n`, resolveWrite));
   process.exit(0);
 }
 
