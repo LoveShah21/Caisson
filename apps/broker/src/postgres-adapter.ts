@@ -175,7 +175,7 @@ function summarise(params: unknown): string {
 
 function assertReadOnlyStatement(sql: string): void {
   if (/^\s*explain\b/iu.test(sql)) {
-    throw new CaissonError("SCOPE_DENIED", "postgres EXPLAIN is not supported in M-2");
+    throw new CaissonError("SCOPE_DENIED", "postgres EXPLAIN is not supported");
   }
   const statement = assertOneStatement(sql);
   if (!isReadOnlyStatement(statement) || hasSideEffectingFunction(statement)) {

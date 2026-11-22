@@ -36,7 +36,7 @@ FR-1 to FR-6, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 **Follow-up work, not a claim of M-2 gate completion:**
 
 - [ ] Define a long-term third-party image supply-chain control, such as a private mirror or freshness check. Two unrelated public registries have stopped serving pinned images during M-2.
-- [ ] Evaluate a PostgreSQL parser for deferred EXPLAIN support against the SELECT bypass suite and maintenance/coverage criteria. M-2 denies EXPLAIN.
+- [x] Close ADR-29's deferred EXPLAIN evaluation. ADR-49 keeps EXPLAIN outside the v1 broker query capability; any future support needs a new parser and database-role review.
 
 **Gate:**
 - An agent queries Postgres successfully with no credential present in the guest.

@@ -29,16 +29,18 @@ describe("PostgresAdapter", () => {
     await expectQueryDenied("SELECT * INTO copied_accounts FROM accounts", "PARAMS_INVALID");
   });
 
-  it("denies EXPLAIN as unsupported in M-2", async () => {
+  it("denies EXPLAIN and EXPLAIN ANALYZE as unsupported", async () => {
     const adapter = new PostgresAdapter(config);
     const credentials = credentialsFor("postgres://unused:unused@127.0.0.1:1/unused");
     try {
-      await expect(
-        adapter.methods.query.execute(credentials, { sql: "EXPLAIN SELECT 1" }, context),
-      ).rejects.toMatchObject({
-        code: "SCOPE_DENIED",
-        message: "postgres EXPLAIN is not supported in M-2",
-      });
+      for (const sql of ["EXPLAIN SELECT 1", "EXPLAIN ANALYZE SELECT 1"]) {
+        await expect(
+          adapter.methods.query.execute(credentials, { sql }, context),
+        ).rejects.toMatchObject({
+          code: "SCOPE_DENIED",
+          message: "postgres EXPLAIN is not supported",
+        });
+      }
     } finally {
       await adapter.close();
     }
