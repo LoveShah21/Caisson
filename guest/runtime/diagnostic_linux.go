@@ -127,6 +127,13 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			return
 		}
 	}
+	if request.Operation == "resume_point" && request.Path == "" && request.Value == "" {
+		value, err := os.ReadFile("/run/caisson/resume.json")
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: string(value)})
+			return
+		}
+	}
 	if request.Operation == "write_marker" && request.Path == "/dev/shm/caisson-marker" && len(request.Value) <= 256 {
 		err := diagnosticWriteMarker(request.Path, request.Value)
 		if err == nil {

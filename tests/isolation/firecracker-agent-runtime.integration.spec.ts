@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { accessSync, constants } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ import {
   PostgresAdapter,
 } from "../../apps/broker/src/index.js";
 import {
+  S3SessionSnapshotStore,
   SessionActionGate,
   SessionIdentityResolver,
   SessionSnapshotCrypto,
@@ -21,6 +23,7 @@ import {
   type SessionSnapshotStore,
   SessionTokenService,
 } from "../../apps/control-plane/src/index.js";
+import { EnvManifestKeyProvider } from "../../apps/control-plane/src/snapshot-storage.js";
 import {
   AuditOutboxWriter,
   ClickHouseAuditSink,
@@ -38,6 +41,7 @@ import { PolicyBundleLoader } from "../../packages/policy/src/index.js";
 import { EnvSecretBackend, SecretString } from "../../packages/secrets/src/index.js";
 import type { SecretBackend } from "../../packages/secrets/src/types.js";
 import { type ClickHouseFixture, createClickHouseFixture } from "../helpers/clickhouse.js";
+import { createMinioFixture } from "../helpers/minio.js";
 import { createPostgresFixture, type PostgresFixture } from "../helpers/postgres.js";
 
 const rootfsPath = process.env.CAISSON_AGENT_RUNTIME_DIAGNOSTIC_ROOTFS ?? "";
@@ -451,16 +455,34 @@ describe("Firecracker M-3 agent runtime", () => {
         transportKind: source.transport.kind,
         peerIdentifier: source.transport.peerIdentifier,
       });
-      const store = new BlockingLocalSnapshotStore(sessionId, baseSnapshotId);
-      const snapshotService = new SessionSnapshotService({
+      const minio = await createMinioFixture();
+      const snapshotCache = await mkdtemp(join(tmpdir(), "caisson-kvm-session-snapshots-"));
+      const snapshotCrypto = new SessionSnapshotCrypto(new KvmSnapshotKeyBackend(), {
+        backend: "env",
+        backendPath: "KVM_SESSION_SNAPSHOT_KEK",
+        role: "snapshot-kek",
+      });
+      const store = new BlockingLocalSnapshotStore(
+        new S3SessionSnapshotStore({
+          endpoint: minio.endpoint,
+          region: "us-east-1",
+          accessKeyId: minio.accessKeyId,
+          secretAccessKey: minio.secretAccessKey,
+          bucket: `kvm-session-snapshots-${randomUUID()}`,
+          cacheDirectory: snapshotCache,
+          cacheMaxBytes: 1_073_741_824,
+          manifestKeys: new EnvManifestKeyProvider(
+            "kvm-manifest-key",
+            randomBytes(32).toString("base64"),
+          ),
+          crypto: snapshotCrypto,
+        }),
+      );
+      const snapshotOptions: ConstructorParameters<typeof SessionSnapshotService>[0] = {
         sql: postgres.sql,
         driver,
         transportHost: host,
-        crypto: new SessionSnapshotCrypto(new KvmSnapshotKeyBackend(), {
-          backend: "env",
-          backendPath: "KVM_SESSION_SNAPSHOT_KEK",
-          role: "snapshot-kek",
-        }),
+        crypto: snapshotCrypto,
         store,
         baseStore: {
           resolve: async (ref) => ({
@@ -482,12 +504,29 @@ describe("Firecracker M-3 agent runtime", () => {
           }),
         actionGate,
         captureDrainTimeoutMs: 5_000,
-        retention: { count: 10, durationMs: 60_000 },
-      });
+        retention: { count: 1, durationMs: 60_000 },
+      };
+      const snapshotService = new SessionSnapshotService(snapshotOptions);
       await snapshotService.provisionSessionKey(postgres.sql, sessionId);
       let restored: PreparedSandbox | undefined;
       try {
         await driver.start(source.handle);
+        const heldAction = actionGate.enter(sessionId);
+        expect(heldAction).toBeDefined();
+        try {
+          await expect(
+            new SessionSnapshotService({
+              ...snapshotOptions,
+              captureDrainTimeoutMs: 10,
+            }).capture(sessionId, source, baseSnapshotId),
+          ).rejects.toThrow("session snapshot action drain timed out without creating a snapshot");
+          const [aborted] = await postgres.sql<{ count: string }[]>`
+            SELECT count(*)::text AS count FROM snapshots WHERE session_id = ${sessionId}
+          `;
+          expect(aborted?.count).toBe("0");
+        } finally {
+          heldAction?.release();
+        }
         const [auditTail] = await postgres.sql<{ seq: number }[]>`
           SELECT next_audit_seq AS seq FROM sessions WHERE id = ${sessionId}
         `;
@@ -538,11 +577,42 @@ describe("Firecracker M-3 agent runtime", () => {
         `;
         expect(point?.resume_action_id).toBe(actionId);
 
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const sibling = await snapshotService.capture(sessionId, source, baseSnapshotId);
+        const [siblingPoint] = await postgres.sql<
+          { resume_audit_seq: number; resume_action_id: string }[]
+        >`
+          SELECT resume_audit_seq, resume_action_id FROM snapshots WHERE id = ${sibling.id}
+        `;
+        expect(siblingPoint).toBeDefined();
+        const [keys] = await postgres.sql<{ first_key_count: string; sibling_key_count: string }[]>`
+          SELECT
+            (SELECT count(*)::text FROM snapshot_keys WHERE snapshot_id = ${ref.id}) AS first_key_count,
+            (SELECT count(*)::text FROM snapshot_keys WHERE snapshot_id = ${sibling.id}) AS sibling_key_count
+        `;
+        expect(keys).toEqual({ first_key_count: "0", sibling_key_count: "1" });
+        await expect(
+          snapshotService.restore(ref, sessionId, { id: randomUUID(), image: "agent-runtime" }),
+        ).rejects.toThrow("suspension point is unavailable");
+        await expect(
+          snapshotService.restore(sibling, randomUUID(), {
+            id: randomUUID(),
+            image: "agent-runtime",
+          }),
+        ).rejects.toThrow("restore lineage is invalid");
+
         await driver.destroy(source.handle);
         await releaseTransportBinding(identities, host, source);
-        restored = await snapshotService.restore(ref, sessionId, {
+        restored = await snapshotService.restore(sibling, sessionId, {
           id: randomUUID(),
           image: "agent-runtime",
+        });
+        const resumePoint = await waitForDiagnostic(host.endpointFor(restored.transport), {
+          operation: "resume_point",
+        });
+        expect(JSON.parse(resumePoint.value ?? "null")).toMatchObject({
+          lastAuditSeq: siblingPoint?.resume_audit_seq,
+          lastActionId: siblingPoint?.resume_action_id,
         });
         const capturedMarker = await invoke(host, restored, {
           id: "snapshot-read-captured-marker",
@@ -567,6 +637,17 @@ describe("Firecracker M-3 agent runtime", () => {
         const resumeIndex = restoredLog.lastIndexOf("caisson runtime: resume accepted");
         expect(entropyIndex).toBeGreaterThanOrEqual(0);
         expect(resumeIndex).toBeGreaterThan(entropyIndex);
+        await snapshotService.eraseSession(sessionId);
+        const [erased] = await postgres.sql<{ key_count: string }[]>`
+          SELECT count(*)::text AS key_count FROM session_snapshot_keys WHERE session_id = ${sessionId}
+        `;
+        expect(erased?.key_count).toBe("0");
+        await expect(
+          snapshotService.restore(sibling, sessionId, {
+            id: randomUUID(),
+            image: "agent-runtime",
+          }),
+        ).rejects.toThrow();
       } finally {
         if (restored !== undefined) {
           await driver.destroy(restored.handle);
@@ -575,6 +656,8 @@ describe("Firecracker M-3 agent runtime", () => {
           await driver.destroy(source.handle).catch(() => undefined);
           await releaseTransportBinding(identities, host, source).catch(() => undefined);
         }
+        await minio.close();
+        await rm(snapshotCache, { recursive: true, force: true });
       }
     },
     180_000,
@@ -680,53 +763,35 @@ async function waitForAudit(
 }
 
 class BlockingLocalSnapshotStore implements SessionSnapshotStore {
-  readonly #sessionId: string;
-  readonly #baseSnapshotId: string;
-  #local: LocalSnapshot | undefined;
+  readonly #delegate: S3SessionSnapshotStore;
   #startedResolve!: () => void;
   readonly #started = new Promise<void>((resolve) => (this.#startedResolve = resolve));
   #releaseResolve!: () => void;
   readonly #release = new Promise<void>((resolve) => (this.#releaseResolve = resolve));
 
-  constructor(sessionId: string, baseSnapshotId: string) {
-    this.#sessionId = sessionId;
-    this.#baseSnapshotId = baseSnapshotId;
+  constructor(delegate: S3SessionSnapshotStore) {
+    this.#delegate = delegate;
   }
 
-  async store(local: LocalSnapshot): Promise<SnapshotRef> {
-    this.#local = local;
+  async store(
+    local: LocalSnapshot,
+    input: Parameters<S3SessionSnapshotStore["store"]>[1],
+  ): Promise<SnapshotRef> {
     this.#startedResolve();
     await this.#release;
-    return {
-      id: local.id,
-      kind: "session",
-      manifest: {
-        bucket: "kvm-local",
-        key: `${local.id}/manifest.json`,
-        sha256: "d".repeat(64),
-        sizeBytes: 1,
-      },
-      manifestKeyId: "kvm-local",
-      createdAt: local.createdAt,
-      sessionId: this.#sessionId,
-      baseSnapshotId: this.#baseSnapshotId,
-    };
+    return this.#delegate.store(local, input);
   }
 
-  async resolve(ref: SnapshotRef, input: { base: ResolvedSnapshot }): Promise<ResolvedSnapshot> {
-    const local = this.#local;
-    if (local === undefined || local.id !== ref.id)
-      throw new Error("local snapshot is unavailable");
-    return {
-      ref,
-      statePath: local.statePath,
-      memoryPath: local.memoryPath,
-      rootfsPath: input.base.rootfsPath,
-      kernelPath: input.base.kernelPath,
-    };
+  async resolve(
+    ref: SnapshotRef,
+    input: Parameters<S3SessionSnapshotStore["resolve"]>[1],
+  ): Promise<ResolvedSnapshot> {
+    return this.#delegate.resolve(ref, input);
   }
 
-  async deleteObjects(): Promise<void> {}
+  async deleteObjects(ref: SnapshotRef): Promise<void> {
+    await this.#delegate.deleteObjects(ref);
+  }
 
   waitUntilStoreStarted(): Promise<void> {
     return this.#started;
