@@ -510,7 +510,15 @@ describe("Firecracker M-3 agent runtime", () => {
         };
         const actionId = actionResponse.body?.meta?.actionId;
         expect(actionId).toMatch(/^[0-9a-f-]{36}$/iu);
-        await store.waitUntilStoreStarted();
+        // The snapshot API can fail before the store is entered. Observe that
+        // failure here rather than leaving this test waiting for a store call
+        // that will never happen (and capture rejecting without a handler).
+        await Promise.race([
+          store.waitUntilStoreStarted(),
+          capture.then(() => {
+            throw new Error("capture completed before the snapshot store started");
+          }),
+        ]);
 
         const deniedDuringCommit = await invoke(host, source, {
           id: "snapshot-gate-write",
