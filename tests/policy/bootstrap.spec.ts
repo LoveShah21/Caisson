@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
+import { runPolicyTests } from "../../scripts/policy-opa.mjs";
 import { createPostgresFixture, type PostgresFixture } from "../helpers/postgres.js";
 
 describe("policy bootstrap", () => {
@@ -46,4 +49,21 @@ describe("policy bootstrap", () => {
     expect(bundles?.count).toBe("1");
     expect(active?.value.policyBundleId).toMatch(/^[0-9a-f-]{36}$/i);
   });
+
+  it("rejects a policy source whose own Rego test fails before it can be bootstrapped", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "caisson-bad-policy-"));
+    try {
+      await writeFile(
+        join(directory, "default.rego"),
+        'package caisson.bootstrap\nimport rego.v1\ndefault decision := {"decision": "allow"}\n',
+      );
+      await writeFile(
+        join(directory, "default_test.rego"),
+        'package caisson.bootstrap\nimport rego.v1\ntest_default_denies if { decision.decision == "deny" }\n',
+      );
+      await expect(runPolicyTests(directory)).rejects.toThrow("OPA policy tests failed");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

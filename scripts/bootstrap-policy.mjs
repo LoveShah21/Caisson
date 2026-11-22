@@ -1,27 +1,31 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import postgres from "postgres";
 
+import { opaImage, runPolicyTests } from "./policy-opa.mjs";
+
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const policyDirectory = join(repositoryRoot, "policies", "bootstrap");
 const sourcePath = join(policyDirectory, "default.rego");
-const opaImage =
-  "openpolicyagent/opa@sha256:22770e039a71a885231059c93166cce0644db256cab751043d94bfd150f220d5";
+const testPath = join(policyDirectory, "default_test.rego");
 const databaseUrl =
   process.env.CAISSON_DATABASE_URL ??
   "postgres://caisson:caisson-postgres-local-only@localhost:5432/caisson";
 
 const source = await readFile(sourcePath, "utf8");
+const tests = await readFile(testPath, "utf8");
 const sourceHash = createHash("sha256").update(source).digest("hex");
 const outputDirectory = await mkdtemp(join(tmpdir(), "caisson-policy-bootstrap-"));
 // The pinned OPA image runs as a non-root user. Docker bind mounts retain host
 // ownership, so grant that isolated temporary directory write permission only.
 await chmod(outputDirectory, 0o777);
+await writeFile(join(outputDirectory, "default.rego"), source, { mode: 0o644 });
+await writeFile(join(outputDirectory, "default_test.rego"), tests, { mode: 0o644 });
 const bundlePath = join(outputDirectory, "default.tar.gz");
 
 try {
@@ -35,6 +39,7 @@ try {
     await migrationSql.end({ timeout: 5 });
   }
 
+  await runPolicyTests(outputDirectory);
   runOpaBuild(outputDirectory);
   const wasm = await extractPolicyWasm(await readFile(bundlePath));
   const sql = postgres(databaseUrl);
@@ -90,7 +95,7 @@ function runOpaBuild(outputDirectory) {
       "run",
       "--rm",
       "--mount",
-      `type=bind,source=${policyDirectory},target=/src,readonly`,
+      `type=bind,source=${outputDirectory},target=/src,readonly`,
       "--mount",
       `type=bind,source=${outputDirectory},target=/out`,
       opaImage,
