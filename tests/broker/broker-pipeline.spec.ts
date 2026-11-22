@@ -241,6 +241,76 @@ describe("BrokerPipeline", () => {
     expect(secretsFetched).toBe(0);
     expect(adapterCalled).toBe(0);
   });
+
+  it("atomically allows the hundredth method attempt and audits a concurrent rate denial", async () => {
+    await postgres.sql`
+      INSERT INTO session_method_attempts (session_id, service, method, attempt_count)
+      VALUES (${sessionId}, 'postgres', 'query', 99)
+      ON CONFLICT (session_id, service, method)
+      DO UPDATE SET attempt_count = 99
+    `;
+    const request = (id: string) => ({
+      id,
+      op: "broker.call",
+      body: {
+        service: "postgres",
+        method: "query",
+        params: { sql: "SELECT value FROM pipeline_probe" },
+        idempotencyKey: id,
+        intent: "verify atomic rate enforcement",
+      },
+    });
+    const responses = await Promise.all([
+      pipeline.handle(hostPeer, request("rate-concurrent-1")),
+      pipeline.handle(hostPeer, request("rate-concurrent-2")),
+    ]);
+    expect(responses.filter((response) => response.ok)).toHaveLength(1);
+    expect(responses.filter((response) => !response.ok)).toMatchObject([
+      { error: { code: "RATE_LIMITED" } },
+    ]);
+    const [counter] = await postgres.sql<{ attempt_count: number }[]>`
+      SELECT attempt_count FROM session_method_attempts
+      WHERE session_id = ${sessionId} AND service = 'postgres' AND method = 'query'
+    `;
+    expect(counter?.attempt_count).toBe(101);
+    const [denial] = await postgres.sql<{ payload: { eventType: string; errorCode: string } }[]>`
+      SELECT payload FROM audit_outbox
+      WHERE session_id = ${sessionId} AND payload->>'errorCode' = 'RATE_LIMITED'
+      ORDER BY seq DESC LIMIT 1
+    `;
+    expect(denial?.payload).toMatchObject({
+      eventType: "action.denied",
+      errorCode: "RATE_LIMITED",
+    });
+  }, 30_000);
+
+  it("audits a bound-token expiry denial before service or credential use", async () => {
+    await postgres.sql`
+      UPDATE session_tokens SET expires_at = '2026-01-01T00:00:00Z'
+      WHERE session_id = ${sessionId}
+    `;
+    const response = await pipeline.handle(hostPeer, {
+      id: "expired-broker-call",
+      op: "broker.call",
+      body: {
+        service: "postgres",
+        method: "query",
+        params: { sql: "SELECT 1" },
+        idempotencyKey: "expired-broker-call",
+        intent: "verify expiry audit",
+      },
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "SESSION_EXPIRED" } });
+    const [denial] = await postgres.sql<{ payload: { eventType: string; errorCode: string } }[]>`
+      SELECT payload FROM audit_outbox
+      WHERE session_id = ${sessionId} AND payload->>'errorCode' = 'SESSION_EXPIRED'
+      ORDER BY seq DESC LIMIT 1
+    `;
+    expect(denial?.payload).toMatchObject({
+      eventType: "action.denied",
+      errorCode: "SESSION_EXPIRED",
+    });
+  });
 });
 
 function bootstrap(databaseUrl: string, script: string): void {

@@ -23,6 +23,8 @@ import {
 } from "@caisson/telemetry";
 import type { z } from "zod";
 
+import { policyDenialCode } from "./policy-denial.js";
+
 export interface BrokerMethod {
   readonly params: z.ZodType;
   readonly scopeRequired: string | ((params: unknown) => string);
@@ -90,7 +92,36 @@ export class BrokerPipeline {
   ): Promise<BrokerCallResponse> {
     return runInSpan(SPAN_NAMES.brokerCall, async (span) => {
       const startedAt = performance.now();
-      const identity = await this.#identities.resolve(peer);
+      const bound = await this.#identities.resolveForAudit(peer);
+      const identity = bound.identity;
+      if (bound.expired) {
+        const actionId = randomUUID();
+        await this.#audit.persistDurably(
+          auditInput({
+            identity,
+            actionId,
+            request,
+            eventType: "action.denied",
+            decision: "deny",
+            policyBundle: identity.policyBundleId,
+            policyReason: "bound session token is expired or revoked",
+            scopeUsed: "",
+            durationMs: Math.round(performance.now() - startedAt),
+            errorCode: "SESSION_EXPIRED",
+            errorMessage: "bound session token is expired or revoked",
+          }),
+        );
+        return {
+          id: request.id,
+          ok: false,
+          error: {
+            code: "SESSION_EXPIRED",
+            message: "bound session token is expired or revoked",
+            details: {},
+            actionId,
+          },
+        };
+      }
       const lease = this.#actionGate.enter(identity.sessionId);
       if (lease === undefined) {
         const actionId = randomUUID();
@@ -137,54 +168,67 @@ export class BrokerPipeline {
         span.setAttribute(ATTRIBUTE_KEYS.scopeUsed, scopeUsed);
 
         const bundle = await this.#policyBundles.load(identity.policyBundleId);
-        const now = new Date();
-        const decision = bundle.evaluator.evaluate({
-          session: {
-            id: identity.sessionId,
-            roles: identity.roles,
-            scopes: identity.scopes,
-            approvalMode: identity.approvalMode,
-            expiresAt: identity.expiresAt.toISOString(),
-            validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
-            requestedBy: identity.requestedBy,
-            purpose: identity.purpose,
+        const decision = await this.#audit.persistMethodDecision(
+          identity.sessionId,
+          request.body.service,
+          request.body.method,
+          (priorAttempts) => {
+            const now = new Date();
+            const evaluated = bundle.evaluator.evaluate({
+              session: {
+                id: identity.sessionId,
+                roles: identity.roles,
+                scopes: identity.scopes,
+                approvalMode: identity.approvalMode,
+                expiresAt: identity.expiresAt.toISOString(),
+                validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
+                requestedBy: identity.requestedBy,
+                purpose: identity.purpose,
+              },
+              action: {
+                service: service.adapter.name,
+                method: request.body.method,
+                sideEffecting,
+                scopeRequired: scopeUsed,
+                params: params.data,
+              },
+              context: {
+                now: now.toISOString(),
+                hardwareIsolated: identity.hardwareIsolated,
+                actionCountThisMethod: priorAttempts,
+              },
+            });
+            return {
+              input: auditInput({
+                identity,
+                actionId,
+                request,
+                eventType: evaluated.decision === "allow" ? "action.started" : "action.denied",
+                decision: evaluated.decision,
+                policyBundle: bundle.id,
+                policyReason: evaluated.reason,
+                obligations: evaluated.obligations,
+                scopeUsed,
+                ...(evaluated.decision === "allow"
+                  ? {}
+                  : {
+                      durationMs: Math.round(performance.now() - startedAt),
+                      errorCode: policyDenialCode(evaluated),
+                      errorMessage: evaluated.reason,
+                    }),
+              }),
+              value: evaluated,
+            };
           },
-          action: {
-            service: service.adapter.name,
-            method: request.body.method,
-            sideEffecting,
-            scopeRequired: scopeUsed,
-            params: params.data,
-          },
-          context: {
-            now: now.toISOString(),
-            hardwareIsolated: identity.hardwareIsolated,
-            actionCountThisMethod: 0,
-          },
-        });
+        );
         span.setAttribute(ATTRIBUTE_KEYS.decision, decision.decision);
         const obligationContext = resolveObligations(decision.obligations);
         if (decision.decision !== "allow") {
-          await this.#audit.persistDurably(
-            auditInput({
-              identity,
-              actionId,
-              request,
-              eventType: "action.denied",
-              decision: decision.decision,
-              policyBundle: bundle.id,
-              policyReason: decision.reason,
-              obligations: decision.obligations,
-              scopeUsed,
-              durationMs: Math.round(performance.now() - startedAt),
-            }),
-          );
           return {
             id: request.id,
             ok: false,
             error: {
-              code:
-                decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
+              code: policyDenialCode(decision),
               message: decision.reason,
               details: { scopeRequired: scopeUsed },
               actionId,
@@ -192,19 +236,6 @@ export class BrokerPipeline {
           };
         }
 
-        await this.#audit.persistBeforeExecution(
-          auditInput({
-            identity,
-            actionId,
-            request,
-            eventType: "action.started",
-            decision: "allow",
-            policyBundle: bundle.id,
-            policyReason: decision.reason,
-            obligations: decision.obligations,
-            scopeUsed,
-          }),
-        );
         try {
           const credentialRef = await this.#services.resolveCredentialRef(
             request.body.service,

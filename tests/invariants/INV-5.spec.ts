@@ -29,11 +29,11 @@ describe("INV-5: session tokens are opaque, scoped, and expiring", () => {
     await fixture.sql`
       INSERT INTO sessions (
         id, status, agent_image, approval_mode, scopes, roles, policy_bundle_id,
-        requested_by, hardware_isolated, expires_at
+        requested_by, driver, hardware_isolated, expires_at
       ) VALUES
-        (${hashSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', false, '2026-12-31T00:00:00Z'),
-        (${expiredSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', false, '2026-12-31T00:00:00Z'),
-        (${revokedSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', false, '2026-12-31T00:00:00Z')
+        (${hashSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', 'container', false, '2026-12-31T00:00:00Z'),
+        (${expiredSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', 'container', false, '2026-12-31T00:00:00Z'),
+        (${revokedSessionId}, 'ready', 'test-image', 'rule', ARRAY['warehouse.readonly'], ARRAY[]::text[], '018f0000-0000-7000-8000-000000000011', 'test operator', 'container', false, '2026-12-31T00:00:00Z')
     `;
   }, 30_000);
 

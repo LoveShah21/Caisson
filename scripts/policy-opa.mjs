@@ -5,7 +5,7 @@ export const opaImage =
   "openpolicyagent/opa@sha256:22770e039a71a885231059c93166cce0644db256cab751043d94bfd150f220d5";
 
 export async function runPolicyTests(policyDirectory) {
-  const files = await readdir(policyDirectory);
+  const files = await readdir(policyDirectory, { recursive: true });
   const sources = files.filter((file) => file.endsWith(".rego") && !file.endsWith("_test.rego"));
   if (
     sources.length === 0 ||

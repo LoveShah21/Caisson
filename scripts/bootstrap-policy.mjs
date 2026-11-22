@@ -42,28 +42,42 @@ try {
   await runPolicyTests(outputDirectory);
   runOpaBuild(outputDirectory);
   const wasm = await extractPolicyWasm(await readFile(bundlePath));
+  const testAttestationSha256 = policyTestAttestation(source, tests, wasm);
   const sql = postgres(databaseUrl);
 
   try {
     await sql.begin(async (transaction) => {
       const [existing] = await transaction`
-        SELECT id FROM policy_bundles WHERE source_hash = ${sourceHash}
+        SELECT id, wasm_blob FROM policy_bundles WHERE source_hash = ${sourceHash}
+        ORDER BY created_at LIMIT 1 FOR UPDATE
       `;
       const bundleId = existing?.id ?? uuidV7();
 
       if (existing === undefined) {
         await transaction`
           INSERT INTO policy_bundles (
-            id, version, rego_source, wasm_blob, source_hash, created_by, notes
+            id, version, rego_source, rego_test_source, wasm_blob, source_hash,
+            test_attestation_sha256, created_by, notes
           ) VALUES (
             ${bundleId},
             ${`bootstrap-default-${sourceHash.slice(0, 12)}`},
             ${source},
+            ${tests},
             ${wasm},
             ${sourceHash},
+            ${testAttestationSha256},
             'bootstrap:policy',
             'Minimal default-deny and scope-check bundle'
           )
+        `;
+      } else {
+        if (!Buffer.from(existing.wasm_blob).equals(wasm)) {
+          throw new Error("existing policy bundle WASM differs from the pinned bootstrap build");
+        }
+        await transaction`
+          UPDATE policy_bundles
+          SET rego_test_source = ${tests}, test_attestation_sha256 = ${testAttestationSha256}
+          WHERE id = ${bundleId}
         `;
       }
 
@@ -153,4 +167,9 @@ function uuidV7() {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function policyTestAttestation(source, tests, wasm) {
+  const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+  return sha256(`caisson-policy-tests-v1\n${sha256(source)}\n${sha256(tests)}\n${sha256(wasm)}\n`);
 }

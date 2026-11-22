@@ -134,10 +134,12 @@ require_approval contains reason if {
 package caisson.rate
 
 deny contains msg if {
-  input.context.actionCountThisMethod > 100
+  input.context.actionCountThisMethod >= 100
   msg := "per-method rate limit exceeded for this session"
 }
 ```
+
+`actionCountThisMethod` is the host-maintained cumulative count of earlier policy-evaluated attempts for the bound session, service, and method, including denials. It is allocated atomically with that attempt's audit event in Postgres, for broker calls and guest-local tools alike. The pinned default bundle permits at most 100 such attempts per session and method; the 101st is an audited `action.denied` with `RATE_LIMITED`. A bound session or token expired at the time of a call is denied before any adapter or credential fetch and writes a durable `action.denied` with `SESSION_EXPIRED`. Neither limit has a time-window reset or a guest-supplied counter.
 
 ## 8. The SQL rule, explained
 

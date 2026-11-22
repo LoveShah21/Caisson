@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PolicyBundleLoader } from "../../packages/policy/src/policy-evaluator.js";
 import { runPolicyTests } from "../../scripts/policy-opa.mjs";
 import { createPostgresFixture, type PostgresFixture } from "../helpers/postgres.js";
 
@@ -66,4 +68,29 @@ describe("policy bootstrap", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("refuses to load an unattested or tampered policy bundle", async () => {
+    const source = "package caisson.unverified\n";
+    const bundleId = randomUUID();
+    await postgres.sql`
+      INSERT INTO policy_bundles (id, version, rego_source, wasm_blob, source_hash, created_by)
+      VALUES (${bundleId}, 'unverified-test', ${source}, ${Buffer.from([0])},
+              ${createHash("sha256").update(source).digest("hex")}, 'test')
+    `;
+    await expect(new PolicyBundleLoader(postgres.sql).load(bundleId)).rejects.toMatchObject({
+      code: "POLICY_UNAVAILABLE",
+    });
+
+    const [active] = await postgres.sql<{ value: { policyBundleId: string } }[]>`
+      SELECT value FROM settings WHERE key = 'active_policy_bundle'
+    `;
+    if (active === undefined) throw new Error("active policy bundle was not bootstrapped");
+    await postgres.sql`
+      UPDATE policy_bundles SET rego_test_source = 'tampered test source'
+      WHERE id = ${active.value.policyBundleId}
+    `;
+    await expect(
+      new PolicyBundleLoader(postgres.sql).load(active.value.policyBundleId),
+    ).rejects.toMatchObject({ code: "POLICY_UNAVAILABLE" });
+  });
 });

@@ -142,6 +142,53 @@ export class AuditOutboxWriter {
   }
 
   /**
+   * Atomically counts one bound method attempt and records its authorization
+   * outcome. A successful started event is acknowledged by ClickHouse before
+   * the caller may execute the operation.
+   */
+  async persistMethodDecision<T>(
+    sessionId: string,
+    service: string,
+    method: string,
+    decide: (priorAttempts: number) => { input: AuditEventInput; value: T },
+  ): Promise<T> {
+    const outcome = await this.#sql.begin(async (transaction) => {
+      const [counter] = await transaction<{ attempt_count: number }[]>`
+        INSERT INTO session_method_attempts (session_id, service, method, attempt_count)
+        VALUES (${sessionId}, ${service}, ${method}, 1)
+        ON CONFLICT (session_id, service, method)
+        DO UPDATE SET attempt_count = session_method_attempts.attempt_count + 1
+        RETURNING attempt_count
+      `;
+      if (counter === undefined) {
+        throw new CaissonError("AUDIT_UNAVAILABLE", "method counter could not be allocated");
+      }
+      const decision = decide(counter.attempt_count - 1);
+      if (
+        decision.input.sessionId !== sessionId ||
+        decision.input.service !== service ||
+        decision.input.method !== method ||
+        (decision.input.eventType !== "action.started" &&
+          decision.input.eventType !== "action.denied")
+      ) {
+        throw new CaissonError("AUDIT_UNAVAILABLE", "method audit decision is invalid");
+      }
+      const event = await allocateOutboxEvent(
+        transaction,
+        decision.input,
+        buildAuditPayload(decision.input),
+      );
+      return {
+        event,
+        value: decision.value,
+        started: decision.input.eventType === "action.started",
+      };
+    });
+    if (outcome.started) await this.deliverSession(outcome.event.sessionId);
+    return outcome.value;
+  }
+
+  /**
    * Startup and periodic recovery path. Session delivery retains its advisory
    * lock, so concurrent control-plane and broker drainers cannot interleave a
    * session's sequence.

@@ -41,6 +41,8 @@ export const policyBundles = pgTable(
     regoSource: text("rego_source").notNull(),
     wasmBlob: bytea("wasm_blob").notNull(),
     sourceHash: text("source_hash").notNull(),
+    regoTestSource: text("rego_test_source"),
+    testAttestationSha256: text("test_attestation_sha256"),
     signature: text(),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

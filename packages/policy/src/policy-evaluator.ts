@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { CaissonError, type PolicyDecision, PolicyDecisionSchema } from "@caisson/protocol";
 import { type LoadedPolicy, loadPolicy } from "@open-policy-agent/opa-wasm";
 import type { Sql } from "postgres";
@@ -28,7 +30,11 @@ export interface LoadedPolicyBundle {
 interface PolicyBundleRow {
   readonly id: string;
   readonly version: string;
+  readonly rego_source: string;
+  readonly rego_test_source: string | null;
   readonly wasm_blob: Buffer;
+  readonly source_hash: string;
+  readonly test_attestation_sha256: string | null;
 }
 
 /** Evaluates one trusted, already-compiled OPA WASM bundle in process. */
@@ -82,12 +88,22 @@ export class PolicyBundleLoader {
     const cached = this.#loaded.get(bundleId);
     if (cached !== undefined) return cached;
     const [bundle] = await this.#sql<PolicyBundleRow[]>`
-      SELECT id, version, wasm_blob
+      SELECT id, version, rego_source, rego_test_source, wasm_blob,
+             source_hash, test_attestation_sha256
       FROM policy_bundles
       WHERE id = ${bundleId} AND retired_at IS NULL
     `;
     if (bundle === undefined) {
       throw new CaissonError("POLICY_UNAVAILABLE", "policy bundle is unavailable");
+    }
+    if (
+      bundle.rego_test_source === null ||
+      bundle.test_attestation_sha256 === null ||
+      sha256(bundle.rego_source) !== bundle.source_hash ||
+      policyTestAttestation(bundle.rego_source, bundle.rego_test_source, bundle.wasm_blob) !==
+        bundle.test_attestation_sha256
+    ) {
+      throw new CaissonError("POLICY_UNAVAILABLE", "policy bundle lacks a valid test attestation");
     }
     const loaded = {
       id: bundle.id,
@@ -111,4 +127,11 @@ export class PolicyBundleLoader {
     }
     return this.load(setting.value.policyBundleId);
   }
+}
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function policyTestAttestation(source: string, tests: string, wasm: Uint8Array): string {
+  return sha256(`caisson-policy-tests-v1\n${sha256(source)}\n${sha256(tests)}\n${sha256(wasm)}\n`);
 }

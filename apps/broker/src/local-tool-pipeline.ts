@@ -19,6 +19,8 @@ import {
 } from "@caisson/protocol";
 import { getActiveTraceIdentifiers, runInSpan, SPAN_NAMES } from "@caisson/telemetry";
 
+import { policyDenialCode } from "./policy-denial.js";
+
 const EXECUTABLES = new Set([
   "rg",
   "jq",
@@ -82,9 +84,35 @@ export class LocalToolPipeline {
   async authorize(peer: TransportPeer, request: LocalToolRequest): Promise<LocalToolAuthorization> {
     return runInSpan(SPAN_NAMES.brokerCall, async () => {
       const startedAt = performance.now();
-      const identity = await this.#identities.resolve(peer);
+      const bound = await this.#identities.resolveForAudit(peer);
+      const identity = bound.identity;
       const scopeUsed = scopeFor(request.op);
       const actionId = randomUUID();
+      if (bound.expired) {
+        const error = new CaissonError(
+          "SESSION_EXPIRED",
+          "bound session token is expired or revoked",
+          {
+            actionId,
+          },
+        );
+        await this.#audit.persistDurably(
+          auditEvent({
+            identity,
+            actionId,
+            request,
+            eventType: "action.denied",
+            decision: "deny",
+            policyBundleId: identity.policyBundleId,
+            policyReason: error.message,
+            scopeUsed,
+            durationMs: elapsed(startedAt),
+            errorCode: error.code,
+            errorMessage: error.message,
+          }),
+        );
+        throw error;
+      }
       const lease = this.#actionGate.enter(identity.sessionId);
       if (lease === undefined) {
         const error = new CaissonError("SESSION_SUSPENDED", "session snapshot capture is active", {
@@ -132,58 +160,67 @@ export class LocalToolPipeline {
             throw caisson;
           }
         }
-        const decision = bundle.evaluator.evaluate({
-          session: {
-            id: identity.sessionId,
-            roles: identity.roles,
-            scopes: identity.scopes,
-            approvalMode: identity.approvalMode,
-            expiresAt: identity.expiresAt.toISOString(),
-            requestedBy: identity.requestedBy,
-            purpose: identity.purpose,
+        const decision = await this.#audit.persistMethodDecision(
+          identity.sessionId,
+          "guest",
+          request.op,
+          (priorAttempts) => {
+            const now = new Date();
+            const evaluated = bundle.evaluator.evaluate({
+              session: {
+                id: identity.sessionId,
+                roles: identity.roles,
+                scopes: identity.scopes,
+                approvalMode: identity.approvalMode,
+                expiresAt: identity.expiresAt.toISOString(),
+                validAtEvaluation: identity.expiresAt.getTime() > now.getTime(),
+                requestedBy: identity.requestedBy,
+                purpose: identity.purpose,
+              },
+              action: {
+                service: "guest",
+                method: request.op,
+                sideEffecting:
+                  request.op === "fs.write" ||
+                  request.op === "fs.edit" ||
+                  request.op === "proc.exec",
+                scopeRequired: scopeUsed,
+                params: request.body,
+              },
+              context: {
+                now: now.toISOString(),
+                hardwareIsolated: identity.hardwareIsolated,
+                actionCountThisMethod: priorAttempts,
+              },
+            });
+            return {
+              input: auditEvent({
+                identity,
+                actionId,
+                request,
+                eventType: evaluated.decision === "allow" ? "action.started" : "action.denied",
+                decision: evaluated.decision,
+                policyBundleId: bundle.id,
+                policyReason: evaluated.reason,
+                scopeUsed,
+                ...(evaluated.decision === "allow"
+                  ? {}
+                  : {
+                      durationMs: elapsed(startedAt),
+                      errorCode: policyDenialCode(evaluated),
+                      errorMessage: evaluated.reason,
+                    }),
+              }),
+              value: evaluated,
+            };
           },
-          action: {
-            service: "guest",
-            method: request.op,
-            sideEffecting:
-              request.op === "fs.write" || request.op === "fs.edit" || request.op === "proc.exec",
-            scopeRequired: scopeUsed,
-            params: request.body,
-          },
-          context: { now: new Date().toISOString(), hardwareIsolated: identity.hardwareIsolated },
-        });
-        if (decision.decision !== "allow") {
-          await this.#audit.persistDurably(
-            auditEvent({
-              identity,
-              actionId,
-              request,
-              eventType: "action.denied",
-              decision: decision.decision,
-              policyBundleId: bundle.id,
-              policyReason: decision.reason,
-              scopeUsed,
-              durationMs: elapsed(startedAt),
-            }),
-          );
-          throw new CaissonError(
-            decision.decision === "require_approval" ? "APPROVAL_REQUIRED" : "POLICY_DENIED",
-            decision.reason,
-            { scopeRequired: scopeUsed, actionId },
-          );
-        }
-        await this.#audit.persistBeforeExecution(
-          auditEvent({
-            identity,
-            actionId,
-            request,
-            eventType: "action.started",
-            decision: "allow",
-            policyBundleId: bundle.id,
-            policyReason: decision.reason,
-            scopeUsed,
-          }),
         );
+        if (decision.decision !== "allow") {
+          throw new CaissonError(policyDenialCode(decision), decision.reason, {
+            scopeRequired: scopeUsed,
+            actionId,
+          });
+        }
         return {
           id: request.id,
           actionId,

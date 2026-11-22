@@ -124,6 +124,18 @@ export class SessionIdentityResolver {
   }
 
   async resolve(peer: TransportPeer, now: Date = new Date()): Promise<BoundSessionIdentity> {
+    const resolved = await this.resolveForAudit(peer, now);
+    if (resolved.expired) {
+      throw new CaissonError("SESSION_EXPIRED", "bound session token is expired or revoked");
+    }
+    return resolved.identity;
+  }
+
+  /** Host-only lookup for recording an expiry denial without authorizing work. */
+  async resolveForAudit(
+    peer: TransportPeer,
+    now: Date = new Date(),
+  ): Promise<{ identity: BoundSessionIdentity; expired: boolean }> {
     const [identity] = await this.#sql<IdentityRow[]>`
       SELECT
         binding.session_id,
@@ -152,29 +164,28 @@ export class SessionIdentityResolver {
     if (identity === undefined) {
       throw new CaissonError("SESSION_NOT_FOUND", "no active transport binding for connection");
     }
-    if (
-      identity.token_revoked_at !== null ||
-      identity.token_expires_at <= now ||
-      identity.session_expires_at <= now
-    ) {
-      throw new CaissonError("SESSION_EXPIRED", "bound session token is expired or revoked");
-    }
     if (identity.driver !== "container" && identity.driver !== "firecracker") {
       throw new CaissonError("SESSION_NOT_READY", "bound session has no active isolation driver");
     }
 
     return {
-      sessionId: identity.session_id,
-      tokenId: identity.token_id,
-      scopes: intersectScopes(identity.token_scopes, identity.session_scopes),
-      roles: identity.roles,
-      approvalMode: identity.approval_mode,
-      policyBundleId: identity.policy_bundle_id,
-      expiresAt: identity.session_expires_at,
-      requestedBy: identity.requested_by,
-      purpose: identity.purpose,
-      driver: identity.driver,
-      hardwareIsolated: identity.hardware_isolated,
+      identity: {
+        sessionId: identity.session_id,
+        tokenId: identity.token_id,
+        scopes: intersectScopes(identity.token_scopes, identity.session_scopes),
+        roles: identity.roles,
+        approvalMode: identity.approval_mode,
+        policyBundleId: identity.policy_bundle_id,
+        expiresAt: identity.session_expires_at,
+        requestedBy: identity.requested_by,
+        purpose: identity.purpose,
+        driver: identity.driver,
+        hardwareIsolated: identity.hardware_isolated,
+      },
+      expired:
+        identity.token_revoked_at !== null ||
+        identity.token_expires_at <= now ||
+        identity.session_expires_at <= now,
     };
   }
 }

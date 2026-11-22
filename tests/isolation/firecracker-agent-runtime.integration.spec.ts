@@ -349,10 +349,39 @@ describe("Firecracker M-3 agent runtime", () => {
           body: { result: { truncated: true }, meta: { truncated: true } },
         });
         expect(oversizedResponse.body?.result?.preview).toHaveLength(128);
+        await postgres.sql`
+          UPDATE session_method_attempts SET attempt_count = 100
+          WHERE session_id = ${sessionId} AND service = 'guest' AND method = 'fs.read'
+        `;
+        const rateDenied = await invoke(host, prepared, {
+          id: "agent-rate-denied",
+          op: "fs.read",
+          body: { path: "/workspace/note.txt" },
+        });
+        expect(rateDenied).toMatchObject({ ok: false, error: { code: "RATE_LIMITED" } });
+        await postgres.sql`
+          DELETE FROM session_method_attempts
+          WHERE session_id = ${sessionId} AND service = 'guest' AND method = 'fs.read'
+        `;
+        await postgres.sql`
+          UPDATE session_tokens SET expires_at = '2026-01-01T00:00:00Z' WHERE id = ${tokenId}
+        `;
+        try {
+          const expired = await invoke(host, prepared, {
+            id: "agent-expired-denied",
+            op: "fs.read",
+            body: { path: "/workspace/note.txt" },
+          });
+          expect(expired).toMatchObject({ ok: false, error: { code: "SESSION_EXPIRED" } });
+        } finally {
+          await postgres.sql`
+            UPDATE session_tokens SET expires_at = '2026-12-31T00:00:00Z' WHERE id = ${tokenId}
+          `;
+        }
         await audit.drainPending();
         const rows = (
           await clickhouse.query(
-            `SELECT method, event_type, result_bytes, result_hash, params_preview FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
+            `SELECT method, event_type, error_code, result_bytes, result_hash, params_preview FROM actions WHERE session_id = '${sessionId}' ORDER BY seq FORMAT JSONEachRow`,
           )
         )
           .trim()
@@ -363,6 +392,7 @@ describe("Firecracker M-3 agent runtime", () => {
               JSON.parse(row) as {
                 method: string;
                 event_type: string;
+                error_code: string;
                 result_bytes: number;
                 result_hash: string;
                 params_preview: string;
@@ -386,6 +416,22 @@ describe("Firecracker M-3 agent runtime", () => {
         }
         expect(
           rows.some((row) => row.method === "proc.exec" && row.event_type === "action.denied"),
+        ).toBe(true);
+        expect(
+          rows.some(
+            (row) =>
+              row.method === "fs.read" &&
+              row.event_type === "action.denied" &&
+              row.error_code === "RATE_LIMITED",
+          ),
+        ).toBe(true);
+        expect(
+          rows.some(
+            (row) =>
+              row.method === "fs.read" &&
+              row.event_type === "action.denied" &&
+              row.error_code === "SESSION_EXPIRED",
+          ),
         ).toBe(true);
         expect(
           rows.some((row) => row.method === "fs.read" && row.event_type === "action.abandoned"),

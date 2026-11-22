@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
-const policyDirectory = `${repositoryRoot}policies/bootstrap`;
+const policyDirectory = `${repositoryRoot}policies`;
 const opaImage =
   "openpolicyagent/opa@sha256:22770e039a71a885231059c93166cce0644db256cab751043d94bfd150f220d5";
 

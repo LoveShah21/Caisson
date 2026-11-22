@@ -60,6 +60,7 @@ async function applyMigrations(sql: Sql): Promise<void> {
     "0006_m2_services.sql",
     "0007_m2_system_audit.sql",
     "0008_m3_session_snapshots.sql",
+    "0009_m3_policy_guards.sql",
   ]) {
     const source = await readFile(resolve("packages/db/migrations", migration), "utf8");
     await sql.unsafe(source);

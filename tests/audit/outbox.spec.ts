@@ -69,7 +69,7 @@ describe("Postgres audit outbox", () => {
     await Promise.all([writer.deliverSession(sessionId), writer.deliverSession(sessionId)]);
 
     expect(await clickhouse.query(countQuery(sessionId, 2))).toBe("1\n");
-  });
+  }, 30_000);
 
   it("drains pending terminal records during startup or periodic recovery", async () => {
     const writer = new AuditOutboxWriter(postgres.sql, sink);

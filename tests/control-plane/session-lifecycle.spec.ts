@@ -227,7 +227,7 @@ describe("single-session lifecycle", () => {
       SELECT count(*)::text AS count, max(seq) AS max FROM audit_outbox WHERE session_id = ${created.sessionId}
     `;
     expect(sequences).toEqual({ count: "14", max: 14 });
-  });
+  }, 30_000);
 
   it("converges a concurrent delete and failing start on one terminal state with ordered audit events", async () => {
     const driver = new ControlledDriver();

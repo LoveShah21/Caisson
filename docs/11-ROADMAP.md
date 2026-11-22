@@ -58,6 +58,8 @@ FR-16, FR-17b, FR-37, FR-39 to FR-45, and the remaining non-approval policy work
 - `tests/adversarial/sql-evasion.spec.ts` contains at least five evasion attempts, all denied.
 - `POST /v1/policy/simulate` returns a decision with matched rule names.
 
+**Current M-3 verification:** ADR-48's encrypted per-snapshot DEK and session KEK, action-drain gate, and entropy-before-resume acknowledgment have KVM coverage. ADR-50 completes host-side expiry and cumulative per-method rate denial audit for broker and local tools. ADR-51 requires matching test attestation before a policy bundle loads. The SQL evasion suite contains eight denied attempts. The reference agent loop, skill loading and skill attribution (FR-44/FR-45), and the full dynamic INV-8 attack matrix still require implementation and proof; this milestone is not closed by the checks above.
+
 ## M-4. Approvals and interception (weeks 6 to 7)
 
 FR-7, FR-46 to FR-54, FR-59 to FR-62, and the github and slack portion of FR-29. Websocket hub, approval queue with timeout, signed decisions, approval UI, redaction pipeline, mitmproxy interceptor, host-side blocked-egress monitor, github adapter, and slack adapter. Github supplies the `createPullRequest` approval journey. Slack supplies approver notifications and the notify obligation.

@@ -115,6 +115,8 @@ CREATE TABLE policy_bundles (
   rego_source   TEXT NOT NULL,
   wasm_blob     BYTEA NOT NULL,
   source_hash   TEXT NOT NULL,
+  rego_test_source TEXT,                 -- null means not attested; loader rejects
+  test_attestation_sha256 TEXT CHECK (test_attestation_sha256 ~ '^[a-f0-9]{64}$'),
   signature     TEXT,                    -- detached signature over source_hash
   created_by    TEXT NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -125,7 +127,21 @@ CREATE TABLE policy_bundles (
 CREATE UNIQUE INDEX ON policy_bundles (version);
 ```
 
-Bundles are never updated in place. A change is a new row. Sessions reference the bundle they started with, so a policy change mid-session cannot alter what an in-flight session is evaluated against. Retiring a bundle that live sessions reference is blocked.
+Policy source and WASM are never updated in place. A change is a new row. The explicit bootstrap command may attach or refresh test attestation metadata only after testing the exact stored source and checking that the compiled WASM bytes match the stored bytes. A missing or mismatched attestation prevents loading. Sessions reference the bundle they started with, so a policy change mid-session cannot alter what an in-flight session is evaluated against. Retiring a bundle that live sessions reference is blocked.
+
+### 1.4a session_method_attempts
+
+```sql
+CREATE TABLE session_method_attempts (
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  service TEXT NOT NULL,
+  method TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL CHECK (attempt_count > 0),
+  PRIMARY KEY (session_id, service, method)
+);
+```
+
+The broker increments this cumulative counter for each policy-evaluated call, including policy denials. Local tools use service `guest`. The counter increment and authorization audit event commit in one Postgres transaction. The existing pinned Rego bundle denies when the prior attempt count reaches 100; there is no time-window reset.
 
 ### 1.5 services and credentials
 
