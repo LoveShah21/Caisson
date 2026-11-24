@@ -16,9 +16,10 @@ tag_mirror=https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux
 archive_url=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.1.167.tar.xz
 signature_url=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.1.167.tar.sign
 
-for command in git gpg make gcc sha256sum bison flex bc pahole curl tar xz; do
+for command in git gpg make gcc sha256sum bison flex bc pahole curl tar xz python3; do
   command -v "$command" >/dev/null || { echo "missing build tool: $command" >&2; exit 1; }
 done
+python3 "$repo_root/guest/kernel/check-toolchain.py"
 printf '%s  %s\n' "$config_sha256" "$config" | sha256sum --check --status
 grep -qx 'CONFIG_SECURITY_LANDLOCK=y' "$config"
 grep -q '^CONFIG_LSM="landlock,' "$config"

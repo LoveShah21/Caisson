@@ -29,17 +29,25 @@ Landlock ABI, allows execute on `/init` only, then proves `/init` executes and
 conditions hold. The probe rootfs is temporary and is not a production base
 snapshot.
 
-The observed build used GCC 13.3.0, binutils 2.42, GNU Make 4.3, Bison 3.8.2,
-Flex 2.6.4, pahole 1.25, and OpenSSL 3.0.13. The script pins source and config
-inputs and fixes kernel build metadata; it does not vendor this toolchain.
-Changing the toolchain can change the output image hash and requires a new
-artifact review.
+`toolchain.lock.json` pins the exact Ubuntu 24.04 package version and package
+archive SHA-256 for the compiler, binutils, make, parser generators, build
+libraries, and their detected runtime dependency closure (94 packages in this
+pin). It also pins the SHA-256 of each installed package's files and 42 executable or compiler-internal
+files. The build runs `check-toolchain.py` before source retrieval or compilation
+and fails if any value differs. Ubuntu's signed apt package index supplies the
+archive checksums. The lock records the WSL2 build's GCC 13.3.0, binutils 2.42,
+GNU Make 4.3, Bison 3.8.2, Flex 2.6.4, pahole 1.25, and OpenSSL 3.0.13.
+The packages are referenced by exact checksums rather than vendored, so a
+future rebuild still depends on their availability from Ubuntu. A different
+toolchain requires a reviewed lock update and new output-image measurement.
 
 The published Firecracker config still contains an Amazon Linux header and
 `CONFIG_BUILD_SALT` string. These are inherited config metadata, not the
 kernel source or release identity; the build uses the verified vanilla
 kernel.org source. The WSL2 build used for this probe produced a `vmlinux`
 SHA-256 of `ae7ae29bfe62c946b79472f6125bfa7de9c0c3c4ccbe1bb643f42958f67631d5`.
+An independent rebuild after adding the mandatory toolchain lock produced the
+same SHA-256 and passed the KVM Landlock probe again.
 
 Vanilla 6.1 does not include the Amazon Linux-only `CONFIG_SYSGENID` and
 `CONFIG_PTP_1588_CLOCK_VMCLOCK` options from Firecracker's published config.

@@ -54,17 +54,6 @@ const sessionId = "018f0000-0000-7000-8000-000000000901";
 const baseSnapshotId = "018f0000-0000-7000-8000-000000000902";
 const credentialCanary = "AKIAAGENTRUNTIME0000";
 const bootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro init=/init";
-const readinessRequest = {
-  id: "agent-runtime-readiness",
-  op: "broker.call" as const,
-  body: {
-    service: "postgres",
-    method: "query",
-    params: { sql: "SELECT 1" },
-    idempotencyKey: "agent-runtime-readiness",
-    intent: "enable the host entropy readiness gate",
-  },
-};
 
 describe("Firecracker M-3 agent runtime", () => {
   let postgres: PostgresFixture;
@@ -199,7 +188,6 @@ describe("Firecracker M-3 agent runtime", () => {
         runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
         bootArgs,
-        oneShotBrokerRequest: readinessRequest,
       });
       const prepared = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);
       await identities.bind({
@@ -491,7 +479,6 @@ describe("Firecracker M-3 agent runtime", () => {
         runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
         bootArgs,
-        oneShotBrokerRequest: readinessRequest,
       });
       const source = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);
       await identities.bind({
