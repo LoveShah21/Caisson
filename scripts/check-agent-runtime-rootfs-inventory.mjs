@@ -70,4 +70,19 @@ if (rendered !== expectedRendered) {
     "agent runtime rootfs inventory differs from the checked-in allowlist; regenerate only after reviewing every file and dependency",
   );
 }
+for (const path of [
+  "/bin",
+  "/usr/bin",
+  "/usr/local/bin",
+  "/usr/libexec/git-core",
+  "/usr/libexec/git-core/git-remote-http",
+]) {
+  const stat = execFileSync("debugfs", ["-R", `stat ${path}`, rootfs], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (!/User:\s+0\s+Group:\s+0/u.test(stat)) {
+    throw new Error(`trusted executable path is not root-owned: ${path}`);
+  }
+}
 process.stdout.write("PASS agent runtime rootfs inventory and runtime artifact allowlist\n");

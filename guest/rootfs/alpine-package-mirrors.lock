@@ -1,5 +1,6 @@
 # Pinned HTTPS endpoints from Alpine's official mirror registry.
 # Package bytes remain authenticated by alpine-runtime-packages.lock SHA-256.
+https://mirror.jingk.ai/alpine
 https://mirrors.aliyun.com/alpine
 https://mirrors.sjtug.sjtu.edu.cn/alpine
 https://mirror.aarnet.edu.au/pub/alpine

@@ -23,6 +23,7 @@ describe("M-3 agent runtime rootfs inventory", () => {
           {
             encoding: "utf8",
             env: process.env,
+            timeout: 900_000,
           },
         );
         expect(output).toContain("PASS agent runtime rootfs");
@@ -42,6 +43,13 @@ describe("M-3 agent runtime rootfs inventory", () => {
             },
           ),
         ).toBe("/run/caisson/agent.sock\n/run/caisson/resume.json\n");
+        execFileSync("debugfs", ["-w", "-R", "sif /usr/local/bin uid 1000", rootfs]);
+        expect(() =>
+          execFileSync("node", ["scripts/check-agent-runtime-rootfs-inventory.mjs", rootfs], {
+            encoding: "utf8",
+          }),
+        ).toThrow(/root-owned/u);
+        execFileSync("debugfs", ["-w", "-R", "sif /usr/local/bin uid 0", rootfs]);
         const unexpected = join(directory, "unexpected");
         await writeFile(unexpected, "must not be in the agent rootfs");
         execFileSync("debugfs", ["-w", "-R", `write ${unexpected} /unexpected`, rootfs]);
@@ -54,7 +62,7 @@ describe("M-3 agent runtime rootfs inventory", () => {
         await rm(directory, { recursive: true, force: true });
       }
     },
-    180_000,
+    920_000,
   );
 });
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,8 @@ const agentUID = 65532
 const agentGID = 65532
 const workspaceRoot = "/workspace"
 const noFollow = 0x20000
+const gitExecPath = "/usr/libexec/git-core"
+const gitHTTPSHelperPath = gitExecPath + "/git-remote-http"
 
 var executablePaths = map[string]string{
 	"rg":      "/usr/bin/rg",
@@ -110,6 +113,9 @@ func serveAgentSocket() error {
 		return err
 	}
 	if err := os.Chmod(agentSocketPath, 0o600); err != nil {
+		return err
+	}
+	if err := validateTrustedRuntimePaths(); err != nil {
 		return err
 	}
 	if err := captureExecutableInodes(); err != nil {
@@ -504,9 +510,12 @@ func runAllowed(command string, args []string, cwd string, timeoutMS int) (strin
 	}
 	executionContext, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
 	defer cancel()
-	commandProcess := exec.CommandContext(executionContext, path, args...)
+	commandProcess := exec.CommandContext(executionContext, path, gitSafeArguments(command, args)...)
 	commandProcess.Dir = cwd
 	commandProcess.Env = sanitizedChildEnv()
+	if command == "git" {
+		commandProcess.Env = append(commandProcess.Env, gitChildEnv()...)
+	}
 	commandProcess.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: agentUID, Gid: agentGID}}
 	stdout := cappedBuffer{limit: 2 * 1024 * 1024}
 	stderr := cappedBuffer{limit: 2 * 1024 * 1024}
@@ -541,6 +550,36 @@ func sanitizedChildEnv() []string {
 	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/workspace", "LANG=C.UTF-8"}
 }
 
+func gitChildEnv() []string {
+	return []string{
+		"GIT_EXEC_PATH=" + gitExecPath,
+		"GIT_ALLOW_PROTOCOL=https",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_COUNT=6",
+		"GIT_CONFIG_KEY_0=core.hooksPath",
+		"GIT_CONFIG_VALUE_0=/usr/libexec/caisson/disabled-hooks",
+		"GIT_CONFIG_KEY_1=credential.helper",
+		"GIT_CONFIG_VALUE_1=",
+		"GIT_CONFIG_KEY_2=diff.external",
+		"GIT_CONFIG_VALUE_2=",
+		"GIT_CONFIG_KEY_3=core.pager",
+		"GIT_CONFIG_VALUE_3=",
+		"GIT_CONFIG_KEY_4=core.fsmonitor",
+		"GIT_CONFIG_VALUE_4=",
+		"GIT_CONFIG_KEY_5=protocol.ext.allow",
+		"GIT_CONFIG_VALUE_5=never",
+	}
+}
+
+func gitSafeArguments(command string, args []string) []string {
+	if command != "git" || len(args) == 0 || args[0] != "diff" {
+		return args
+	}
+	return append([]string{"diff", "--no-ext-diff", "--no-textconv"}, args[1:]...)
+}
+
 // Capping guest process output prevents a local operation from consuming the
 // runtime's memory before the host applies its independent result cap.
 type cappedBuffer struct {
@@ -561,6 +600,30 @@ func (buffer *cappedBuffer) Write(input []byte) (int, error) {
 		return len(input), nil
 	}
 	return buffer.Buffer.Write(input)
+}
+
+func validateTrustedRuntimePaths() error {
+	for _, directory := range []string{"/usr/local/bin", "/usr/bin", "/bin", gitExecPath} {
+		info, err := os.Lstat(directory)
+		if err != nil || !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("executable search directory is not trusted")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return fmt.Errorf("executable search directory is not root owned")
+		}
+	}
+	for _, path := range []string{gitHTTPSHelperPath} {
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("trusted helper is absent or writable")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 {
+			return fmt.Errorf("trusted helper is not root owned")
+		}
+	}
+	return nil
 }
 
 func captureExecutableInodes() error {
@@ -588,11 +651,38 @@ func allowedGit(args []string) bool {
 		return false
 	}
 	switch args[0] {
-	case "fetch", "clone", "log", "diff", "status":
+	case "fetch", "clone":
+		if len(args) != 2 && !(args[0] == "clone" && len(args) == 3) {
+			return false
+		}
+		remote, err := url.Parse(args[1])
+		if err != nil || remote.Scheme != "https" || remote.Hostname() == "" || remote.User != nil || remote.Opaque != "" || remote.Fragment != "" {
+			return false
+		}
+		if len(args) == 3 {
+			return safeGitDestination(args[2])
+		}
 		return true
+	case "status":
+		return len(args) == 1 || (len(args) == 2 && (args[1] == "--short" || args[1] == "--porcelain"))
+	case "log":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "--oneline")
+	case "diff":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "--stat")
 	default:
 		return false
 	}
+}
+
+func safeGitDestination(value string) bool {
+	if value == "" || strings.HasPrefix(value, "-") || strings.Contains(value, "\\") {
+		return false
+	}
+	clean := filepath.Clean(value)
+	if clean != value || clean == ".." || strings.HasPrefix(clean, "../") {
+		return false
+	}
+	return !filepath.IsAbs(clean) || strings.HasPrefix(clean, workspaceRoot+"/")
 }
 
 func openWorkspaceFile(path string, flags, mode int) (*os.File, error) {

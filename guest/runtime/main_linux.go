@@ -334,10 +334,10 @@ func mountFilesystems() error {
 		return fmt.Errorf("mount proc: %w", err)
 	}
 	if agentRuntimeBuild {
-		if err := syscall.Mount("tmpfs", "/run", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=0755,size=1m"); err != nil {
+		if err := syscall.Mount("tmpfs", "/run", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "mode=0755,size=1m"); err != nil {
 			return fmt.Errorf("mount run: %w", err)
 		}
-		if err := syscall.Mount("tmpfs", "/workspace", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV, "mode=0700,size=64m"); err != nil {
+		if err := syscall.Mount("tmpfs", "/workspace", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "mode=0700,size=64m"); err != nil {
 			return fmt.Errorf("mount workspace: %w", err)
 		}
 	}

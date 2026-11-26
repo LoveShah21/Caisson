@@ -44,7 +44,7 @@ FR-1 to FR-6, FR-13 to FR-15, FR-17a, FR-18 to FR-28, FR-30 to FR-36, FR-39a, an
 - Forged identity fields in guest requests change nothing.
 - `bench-broker.mjs` records overhead against NFR-2.
 
-**Current status:** Stages A through E are implemented. The M-2 gate evidence above, including the KVM-only INV-1 proof, the broker-overhead measurement, and CI, has been recorded. M-2 is intentionally not accepted or tagged pending final review. INV-2 and FR-7 are deferred to M-4 by ADR-40 and ADR-41. FR-16 and FR-17b remain deferred to M-3 by ADR-26.
+**Current status:** Stages A through E are implemented and M-2 is tagged. The M-2 gate evidence above, including the KVM-only INV-1 proof, the broker-overhead measurement, and CI, has been recorded. INV-2 and FR-7 are deferred to M-4 by ADR-40 and ADR-41. FR-16 and FR-17b were assigned to M-3 by ADR-26.
 
 **M-1 verification note:** The `m1` tag was created with `INV-7` exercised on `ContainerDriver` only. The Firecracker case subsequently passed during M-2 on a KVM-capable WSL2 environment using the eligible diagnostic runtime rootfs. An unavailable KVM environment must still report an explicit skipped Firecracker case rather than a passing result.
 
@@ -58,7 +58,7 @@ FR-16, FR-17b, FR-37, FR-39 to FR-45, and the remaining non-approval policy work
 - `tests/adversarial/sql-evasion.spec.ts` contains at least five evasion attempts, all denied.
 - `POST /v1/policy/simulate` returns a decision with matched rule names.
 
-**Current M-3 verification:** ADR-48's encrypted per-snapshot DEK and session KEK, action-drain gate, and entropy-before-resume acknowledgment have KVM coverage. ADR-50 completes host-side expiry and cumulative per-method rate denial audit for broker and local tools. ADR-51 requires matching test attestation before a policy bundle loads. The SQL evasion suite contains eight denied attempts. The reference agent loop, skill loading and skill attribution (FR-44/FR-45), and the full dynamic INV-8 attack matrix still require implementation and proof; this milestone is not closed by the checks above.
+**Current M-3 verification:** ADR-48's encrypted per-snapshot DEK and session KEK, action-drain gate, and entropy-before-resume acknowledgment have KVM coverage. ADR-50 completes host-side expiry and cumulative per-method rate denial audit for broker and local tools. ADR-51 requires matching test attestation before a policy bundle loads. The SQL evasion suite contains eight denied attempts. INV-8 is an explicit M-3 blocker under ADR-53: the verified kernel's Landlock path rules do not prevent an authorized runtime from executing an unapproved ELF through an anonymous memfd. The reference agent loop and skill loading and attribution (FR-44/FR-45) also still require implementation and proof. M-3 remains open and must not be tagged on the evidence above.
 
 ## M-4. Approvals and interception (weeks 6 to 7)
 

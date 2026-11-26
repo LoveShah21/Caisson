@@ -84,15 +84,24 @@ rm -rf "$work/staging/etc" "$work/staging/home" "$work/staging/media" "$work/sta
   "$work/staging/opt" "$work/staging/root" "$work/staging/run" "$work/staging/sbin" \
   "$work/staging/srv" "$work/staging/sys" "$work/staging/var" "$work/staging/lib/apk" \
   "$work/staging/usr/include" "$work/staging/usr/share"
+rm -f "$work/staging/.post-deinstall" "$work/staging/.trigger"
 mkdir -p "$work/staging/bin" "$work/staging/dev" "$work/staging/proc" "$work/staging/run" "$work/staging/tmp" "$work/staging/workspace" \
-  "$work/staging/usr/bin" "$work/staging/usr/local/bin"
-find "$work/staging/bin" -mindepth 1 ! -name busybox -exec rm -rf {} +
+  "$work/staging/usr/bin" "$work/staging/usr/local/bin" "$work/staging/usr/libexec/caisson"
+find "$work/staging/bin" -mindepth 1 -exec rm -rf {} +
 find "$work/staging/usr/bin" -mindepth 1 \
   ! -name git ! -name jq ! -name node ! -name python3 ! -name python3.12 ! -name rg -exec rm -rf {} +
 rm -rf "$work/staging/usr/lib/python3.12/ensurepip"
+sh "$root/build-minimal-text-tools.sh" "$work/staging/usr/libexec/caisson/text-tools"
 for tool in cat ls head tail wc sort uniq diff; do
-  ln -sf /bin/busybox "$work/staging/usr/local/bin/$tool"
+  ln -sf /usr/libexec/caisson/text-tools "$work/staging/usr/local/bin/$tool"
 done
+
+# Git's HTTPS remote helper is the only permitted external executable in the
+# fetch/clone exception. Remove every other helper, hook template, and script.
+find "$work/staging/usr/libexec/git-core" -mindepth 1 -maxdepth 1 \
+  ! -name git-remote-http ! -name git-remote-https -exec rm -rf {} +
+test -f "$work/staging/usr/libexec/git-core/git-remote-http"
+test "$(readlink "$work/staging/usr/libexec/git-core/git-remote-https")" = git-remote-http
 
 # Unprivileged extraction cannot create device nodes. The guest needs only
 # these static nodes; no devtmpfs mount is needed on the read-only rootfs.
@@ -111,6 +120,13 @@ debugfs -w -R 'sif /init mode 0100755' "$output" >/dev/null
 debugfs -w -R 'sif /dev/null mode 020666' "$output" >/dev/null
 debugfs -w -R 'sif /dev/random mode 020666' "$output" >/dev/null
 debugfs -w -R 'sif /dev/urandom mode 020666' "$output" >/dev/null
+# mkfs.ext4 -d preserves the unprivileged builder's uid. The runtime checks
+# these executable search and helper paths are root-owned, so set their ext4
+# inode ownership explicitly without requiring a privileged host build.
+for trusted_path in /bin /usr/bin /usr/local/bin /usr/libexec/git-core /usr/libexec/git-core/git-remote-http; do
+  debugfs -w -R "sif $trusted_path uid 0" "$output" >/dev/null
+  debugfs -w -R "sif $trusted_path gid 0" "$output" >/dev/null
+done
 if [ "$(basename "$output")" = "caisson-agent-runtime-rootfs.ext4" ]; then
   node "$root/../../scripts/check-agent-runtime-rootfs-inventory.mjs" "$output"
 fi

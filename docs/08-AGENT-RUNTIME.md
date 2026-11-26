@@ -30,11 +30,13 @@ it is a local transport for those shapes, not an HTTP API or a second broker.
 
 `rg`, `jq`, `git` (fetch, clone, log, diff, status only, enforced by subcommand check), `node` (restricted to the workspace, no network), `python3` (same), `cat`, `ls`, `head`, `tail`, `wc`, `sort`, `uniq`, `diff`.
 
-Enforcement notes, all of which have tests in INV-8:
+Direct-launch checks, which do not yet prove the full INV-8 invariant (ADR-53):
 - Resolve the binary to a real path and compare against the allowlist by inode, not by name, so a symlink named `rg` does not get you anywhere.
 - Strip and ignore `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS`, `PYTHONSTARTUP` from the child environment.
-- `PATH` in the guest points only at the allowlist directory.
+- `PATH` in the guest is fixed to rootfs-owned `/usr/local/bin:/usr/bin:/bin`; it contains no guest-writable directory.
 - Never pass user content through `sh -c`. There is no code path that builds a command string.
+
+An authorized `node` or `python3` process can still attempt to execute another binary, including one supplied through an anonymous memfd. The current path and inode checks do not mediate that child execution. M-3 remains blocked on an independently verified execution boundary for INV-8.
 
 Every tool invocation crosses the vsock protocol. Local filesystem, process, search, and user-question operations execute outside the agent process and produce audit records under FR-55 and INV-4.
 

@@ -31,12 +31,17 @@ snapshot.
 
 `toolchain.lock.json` pins the exact Ubuntu 24.04 package version and package
 archive SHA-256 for the compiler, binutils, make, parser generators, build
-libraries, and their detected runtime dependency closure (94 packages in this
-pin). It also pins the SHA-256 of each installed package's files and 42 executable or compiler-internal
+libraries, `bzip2` for the minimal text-tool source archive, and their detected runtime dependency closure (95 packages in this
+pin). It also pins the SHA-256 of each installed package's files and 43 executable or compiler-internal
 files. The build runs `check-toolchain.py` before source retrieval or compilation
 and fails if any value differs. Ubuntu's signed apt package index supplies the
 archive checksums. The lock records the WSL2 build's GCC 13.3.0, binutils 2.42,
 GNU Make 4.3, Bison 3.8.2, Flex 2.6.4, pahole 1.25, and OpenSSL 3.0.13.
+When a rolling Ubuntu index removes an older package revision, verification
+may reuse only that revision's checked-in archive checksum; the installed
+version, complete installed-file digest, and direct executable hashes must
+still match the lock. Creating or updating the lock never uses this fallback
+and requires a checksum from the signed apt index.
 The packages are referenced by exact checksums rather than vendored, so a
 future rebuild still depends on their availability from Ubuntu. A different
 toolchain requires a reviewed lock update and new output-image measurement.

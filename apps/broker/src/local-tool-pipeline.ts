@@ -36,7 +36,6 @@ const EXECUTABLES = new Set([
   "uniq",
   "diff",
 ]);
-const GIT_SUBCOMMANDS = new Set(["fetch", "clone", "log", "diff", "status"]);
 
 type Identity = Awaited<ReturnType<SessionIdentityResolver["resolve"]>>;
 
@@ -400,14 +399,60 @@ function scopeFor(operation: LocalToolRequest["op"]): string {
   }
 }
 
-function assertAllowedExec(argv: readonly string[]): void {
+export function assertAllowedExec(argv: readonly string[]): void {
   const command = argv[0];
   if (command === undefined || !EXECUTABLES.has(command) || command.includes("/")) {
     throw new CaissonError("BINARY_NOT_ALLOWED", "executable is not allowlisted");
   }
-  if (command === "git" && (argv[1] === undefined || !GIT_SUBCOMMANDS.has(argv[1]))) {
-    throw new CaissonError("BINARY_NOT_ALLOWED", "git subcommand is not allowlisted");
+  if (command === "git" && !allowedGitArguments(argv.slice(1))) {
+    throw new CaissonError("BINARY_NOT_ALLOWED", "git arguments are not allowlisted");
   }
+}
+
+function allowedGitArguments(args: readonly string[]): boolean {
+  const [operation, ...rest] = args;
+  switch (operation) {
+    case "fetch":
+    case "clone": {
+      if (rest.length !== 1 && !(operation === "clone" && rest.length === 2)) return false;
+      const remote = rest[0];
+      if (remote === undefined) return false;
+      let url: URL;
+      try {
+        url = new URL(remote);
+      } catch {
+        return false;
+      }
+      if (
+        url.protocol !== "https:" ||
+        url.hostname === "" ||
+        url.username !== "" ||
+        url.password !== "" ||
+        url.hash !== ""
+      )
+        return false;
+      return rest.length === 1 || safeGitDestination(rest[1]);
+    }
+    case "status":
+      return (
+        rest.length === 0 ||
+        (rest.length === 1 && ["--short", "--porcelain"].includes(rest[0] ?? ""))
+      );
+    case "log":
+      return rest.length === 0 || (rest.length === 1 && rest[0] === "--oneline");
+    case "diff":
+      return rest.length === 0 || (rest.length === 1 && rest[0] === "--stat");
+    default:
+      return false;
+  }
+}
+
+function safeGitDestination(value: string | undefined): boolean {
+  if (value === undefined || value === "" || value.startsWith("-") || value.includes("\\"))
+    return false;
+  if (value.startsWith("/") && !value.startsWith("/workspace/")) return false;
+  const relative = value.startsWith("/workspace/") ? value.slice("/workspace/".length) : value;
+  return !relative.split("/").some((part) => part === ".." || part === "." || part === "");
 }
 
 function auditEvent(input: {

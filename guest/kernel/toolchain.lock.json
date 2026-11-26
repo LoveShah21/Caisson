@@ -28,6 +28,10 @@
       "path": "/usr/bin/bison",
       "sha256": "b67826f519b3bc9c6cc4fb50d03bf6c362ba3f202b32a553c7256a801f4c985e"
     },
+    "bzip2": {
+      "path": "/usr/bin/bzip2",
+      "sha256": "909769e6f36ab54e52f1099d59aec0e8d2f27b8c53f95c63429f5c571e027ada"
+    },
     "chmod": {
       "path": "/usr/bin/chmod",
       "sha256": "636dc2e0792244a537121ec10b6e140797cb8d27d231f5c1d025148d1b0c6fc8"
@@ -195,6 +199,11 @@
       "archiveSha256": "9d75084d1293f68f3c1a2ee677dea5baa4e010bac2d4c455d8e23177e97aa353",
       "installedFilesSha256": "0249a65f8db5d1c3553e3811b74f9c64fb4b0ddcb7aba502a0b221e53a30e3d6",
       "version": "2:3.8.2+dfsg-1ubuntu0.24.04.1"
+    },
+    "bzip2": {
+      "archiveSha256": "60fb79214dd8366fa39d7e69911294e72b9f1a4425a3d22f211359c8626e4b9e",
+      "installedFilesSha256": "f0d166813c7a2becdfb56ee22841803e3741a0837f89a1a51840521950553943",
+      "version": "1.0.8-5.1ubuntu0.1"
     },
     "coreutils": {
       "archiveSha256": "e1e9a17892be0cc83b7cea747edf331ffeb6d6c010b4db296e60d888e8e9274c",

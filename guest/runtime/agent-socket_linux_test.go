@@ -22,6 +22,41 @@ func TestRunAllowedRejectsDisallowedBinaryAndGitSubcommand(t *testing.T) {
 	}
 }
 
+func TestGitArgumentsAndEnvironmentRejectSubprocessSurfaces(t *testing.T) {
+	for _, args := range [][]string{
+		{"push"}, {"-c", "core.hooksPath=/workspace", "status"},
+		{"fetch", "ext::sh -c id"}, {"clone", "file:///workspace/repo"},
+		{"clone", "https://example.com/repo", "../outside"},
+		{"diff", "--ext-diff"}, {"status", "--untracked-files=all"},
+	} {
+		if allowedGit(args) {
+			t.Fatalf("git subprocess surface accepted: %q", args)
+		}
+	}
+	for _, args := range [][]string{
+		{"fetch", "https://example.com/repo"},
+		{"clone", "https://example.com/repo", "repo"},
+		{"log", "--oneline"}, {"diff", "--stat"}, {"status", "--short"},
+	} {
+		if !allowedGit(args) {
+			t.Fatalf("safe git arguments denied: %q", args)
+		}
+	}
+	environment := strings.Join(gitChildEnv(), "\n")
+	for _, setting := range []string{
+		"GIT_EXEC_PATH=/usr/libexec/git-core", "GIT_ALLOW_PROTOCOL=https",
+		"GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_KEY_1=credential.helper",
+		"GIT_CONFIG_KEY_4=core.fsmonitor", "GIT_CONFIG_KEY_5=protocol.ext.allow",
+	} {
+		if !strings.Contains(environment, setting) {
+			t.Fatalf("missing git isolation setting: %s", setting)
+		}
+	}
+	if got := strings.Join(gitSafeArguments("git", []string{"diff", "--stat"}), " "); got != "diff --no-ext-diff --no-textconv --stat" {
+		t.Fatalf("git diff can invoke a configured external helper: %s", got)
+	}
+}
+
 func TestRunAllowedUsesFixedSanitizedEnvironment(t *testing.T) {
 	withTestExecutables(t, map[string]string{"cat": "/bin/echo"})
 	t.Setenv("LD_PRELOAD", "/tmp/attacker.so")

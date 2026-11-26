@@ -12,7 +12,7 @@ import sys
 
 
 COMMANDS = (
-    "bash", "git", "gpg", "curl", "tar", "xz", "sha256sum", "awk", "grep",
+    "bash", "git", "gpg", "curl", "tar", "xz", "bzip2", "sha256sum", "awk", "grep",
     "sed", "cp", "mkdir", "chmod", "install", "make", "gcc", "g++", "as",
     "ld", "ar", "nm", "objcopy", "objdump", "readelf", "strip", "ranlib",
     "size", "bison", "flex", "bc", "pahole", "openssl", "perl", "python3",
@@ -42,7 +42,7 @@ def owner(path: Path) -> str:
     return output.split(": ", 1)[0].split(",", 1)[0]
 
 
-def archive_checksum(package: str, version: str) -> str:
+def archive_checksum(package: str, version: str, pinned: dict | None = None) -> str:
     paragraphs = run("apt-cache", "show", package).split("\n\n")
     for paragraph in paragraphs:
         fields = dict(
@@ -52,6 +52,12 @@ def archive_checksum(package: str, version: str) -> str:
         )
         if fields.get("Version") == version and re.fullmatch(r"[0-9a-f]{64}", fields.get("SHA256", "")):
             return fields["SHA256"]
+    # Ubuntu's rolling indexes remove superseded revisions. A previously
+    # recorded archive hash may be retained only when the exact installed
+    # version and every installed file still match the checked-in lock.
+    if (pinned is not None and pinned.get("version") == version
+            and re.fullmatch(r"[0-9a-f]{64}", pinned.get("archiveSha256", ""))):
+        return pinned["archiveSha256"]
     raise RuntimeError(f"no signed apt-index checksum for {package}={version}")
 
 
@@ -69,7 +75,7 @@ def package_file_digest(package: str) -> str:
     return digest.hexdigest()
 
 
-def record() -> dict:
+def record(expected: dict | None = None) -> dict:
     os_release = Path("/etc/os-release").read_text()
     if 'ID=ubuntu' not in os_release or 'VERSION_ID="24.04"' not in os_release:
         raise RuntimeError("kernel toolchain lock requires Ubuntu 24.04")
@@ -106,9 +112,10 @@ def record() -> dict:
     package_records = {}
     for package in sorted(packages):
         version = run("dpkg-query", "-W", "-f=${Version}", package)
+        pinned = (expected or {}).get("packages", {}).get(package)
         package_records[package] = {
             "version": version,
-            "archiveSha256": archive_checksum(package, version),
+            "archiveSha256": archive_checksum(package, version, pinned),
             "installedFilesSha256": package_file_digest(package),
         }
     return {
@@ -119,14 +126,15 @@ def record() -> dict:
 
 
 def main() -> None:
-    observed = record()
     if len(sys.argv) == 2 and sys.argv[1] == "--record":
+        observed = record()
         LOCK.write_text(json.dumps(observed, indent=2, sort_keys=True) + "\n")
         print(f"recorded {len(observed['commands'])} build files and {len(observed['packages'])} signed-index package checksums")
         return
     if len(sys.argv) != 1:
         raise SystemExit("usage: check-toolchain.py [--record]")
     expected = json.loads(LOCK.read_text())
+    observed = record(expected)
     if observed != expected:
         raise RuntimeError("kernel build toolchain differs from the checksum-pinned lock")
     print(f"PASS kernel toolchain: {len(observed['commands'])} build files, {len(observed['packages'])} packages")

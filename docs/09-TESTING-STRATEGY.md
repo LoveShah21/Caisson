@@ -38,7 +38,7 @@ You may mock an external service. You may never mock the policy engine, the secr
 
 ## 3. Invariant tests
 
-Files are named for their invariant: `INV-1.spec.ts` through `INV-8.spec.ts`. Each begins with a comment quoting the invariant text from `06-THREAT-MODEL.md`.
+Invariant evidence files use the `INV-N.spec.ts` name and begin with the invariant text from `06-THREAT-MODEL.md`. There is no passing `INV-8.spec.ts` while ADR-53's execution-boundary blocker remains. `tests/isolation/direct-launch-guard.spec.ts` checks only the current direct-launch code; it is not INV-8 evidence. A green CI run cannot close M-3 until the adversarial INV-8 test exists and passes on the verified guest kernel.
 
 They run against both drivers. Where the container driver cannot satisfy an invariant, the test asserts the driver correctly reports `hardwareIsolation: false` and is refused in production mode, rather than being skipped. A skipped security test reads as a passing one to everybody scanning CI.
 
