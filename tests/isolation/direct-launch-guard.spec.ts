@@ -11,7 +11,8 @@ const source = readFileSync("guest/runtime/agent-socket_linux.go", "utf8");
 describe("guest direct-launch guard", () => {
   it("guards the direct-launch allowlist while the full invariant remains blocked by ADR-53", () => {
     expect(source).toContain("func allowedExecutable(command string, args []string)");
-    expect(source).toContain("inode(info) != executableInodes[path]");
+    expect(source).toContain("identity(info) != executableInodes[path]");
+    expect(source).toContain("device: uint64(stat.Dev), inode: stat.Ino");
     expect(source).toContain('command == "git" && !allowedGit(args)');
     expect(source).toContain(
       "exec.CommandContext(executionContext, path, gitSafeArguments(command, args)...)",
