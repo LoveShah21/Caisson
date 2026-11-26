@@ -77,7 +77,14 @@ func TestRunAllowedUsesFixedSanitizedEnvironment(t *testing.T) {
 func TestAllowedExecutableRejectsChangedSymlink(t *testing.T) {
 	directory := t.TempDir()
 	link := filepath.Join(directory, "cat")
-	if err := os.Symlink("/usr/bin/env", link); err != nil {
+	first := filepath.Join(directory, "first")
+	second := filepath.Join(directory, "second")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("fixture"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(first, link); err != nil {
 		t.Fatal(err)
 	}
 	originalPaths := executablePaths
@@ -93,7 +100,7 @@ func TestAllowedExecutableRejectsChangedSymlink(t *testing.T) {
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/bin/echo", link); err != nil {
+	if err := os.Symlink(second, link); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := allowedExecutable("cat", nil); err == nil {

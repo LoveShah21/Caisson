@@ -44,7 +44,12 @@ var executablePaths = map[string]string{
 	"diff":    "/usr/local/bin/diff",
 }
 
-var executableInodes map[string]uint64
+type executableIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+var executableInodes map[string]executableIdentity
 
 type localToolRequest struct {
 	ID   string          `json:"id"`
@@ -540,7 +545,7 @@ func allowedExecutable(command string, args []string) (string, error) {
 		return "", fmt.Errorf("binary not allowed")
 	}
 	info, err := os.Stat(path)
-	if err != nil || executableInodes[path] == 0 || inode(info) != executableInodes[path] {
+	if err != nil || executableInodes[path].inode == 0 || identity(info) != executableInodes[path] {
 		return "", fmt.Errorf("allowlisted binary changed")
 	}
 	return path, nil
@@ -627,23 +632,23 @@ func validateTrustedRuntimePaths() error {
 }
 
 func captureExecutableInodes() error {
-	executableInodes = make(map[string]uint64, len(executablePaths))
+	executableInodes = make(map[string]executableIdentity, len(executablePaths))
 	for _, path := range executablePaths {
 		info, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
-		executableInodes[path] = inode(info)
+		executableInodes[path] = identity(info)
 	}
 	return nil
 }
 
-func inode(info os.FileInfo) uint64 {
+func identity(info os.FileInfo) executableIdentity {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return 0
+		return executableIdentity{}
 	}
-	return stat.Ino
+	return executableIdentity{device: uint64(stat.Dev), inode: stat.Ino}
 }
 
 func allowedGit(args []string) bool {
