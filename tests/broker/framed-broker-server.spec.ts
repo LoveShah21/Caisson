@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assertBrokerResponseCapacity,
@@ -116,7 +118,9 @@ async function startServer(readTimeoutMs = 500): Promise<FramedBrokerServer> {
 }
 
 function endpoint(): string {
-  return `\\\\.\\pipe\\caisson-framing-${randomUUID()}`;
+  return process.platform === "win32"
+    ? `\\\\.\\pipe\\caisson-framing-${randomUUID()}`
+    : join(tmpdir(), `caisson-framing-${randomUUID()}.sock`);
 }
 
 function prefix(length: number): Buffer {

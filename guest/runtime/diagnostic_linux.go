@@ -61,7 +61,7 @@ func serveDiagnosticsWithControl(listenerReady chan<- error, continueBroker chan
 	if err := os.MkdirAll("/dev/shm", 0o700); err != nil {
 		return err
 	}
-	if err := syscall.Mount("tmpfs", "/dev/shm", "tmpfs", 0, "mode=0700,size=1m"); err != nil {
+	if err := syscall.Mount("tmpfs", "/dev/shm", "tmpfs", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "mode=0700,size=1m"); err != nil {
 		return err
 	}
 	fd, err := syscall.Socket(afVsock, syscall.SOCK_STREAM, 0)
@@ -99,8 +99,9 @@ func serveDiagnosticsWithControl(listenerReady chan<- error, continueBroker chan
 }
 
 func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
-	defer syscall.Close(fd)
-	reader := bufio.NewReader(os.NewFile(uintptr(fd), "diagnostic"))
+	connection := os.NewFile(uintptr(fd), "diagnostic")
+	defer connection.Close()
+	reader := bufio.NewReader(connection)
 	line, err := reader.ReadBytes('\n')
 	if err != nil || len(line) > 4096 {
 		return
@@ -188,6 +189,15 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 			return
 		}
 	}
+	if request.Operation == "workspace_noexec" && request.Path == "" && request.Value == "" {
+		value, err := diagnosticWorkspaceNoexec()
+		if err == nil {
+			writeDiagnostic(fd, diagnosticResponse{Ok: true, Value: value})
+			return
+		}
+		writeDiagnostic(fd, diagnosticResponse{Error: "workspace noexec diagnostic failed"})
+		return
+	}
 	if request.Operation == "agent_fault" && request.Path == "" &&
 		(request.Value == "abandon" || request.Value == "invalid_completion" || request.Value == "oversized") {
 		value, err := diagnosticAgentFault(request.Value)
@@ -199,6 +209,29 @@ func handleDiagnostic(fd int, continueBroker chan<- struct{}) {
 		return
 	}
 	writeDiagnostic(fd, diagnosticResponse{Error: "invalid request"})
+}
+
+// This test-only probe invokes a real copied ELF without passing through the
+// local-tool launcher. EACCES must come from the workspace mount itself.
+func diagnosticWorkspaceNoexec() (string, error) {
+	const candidate = "/workspace/noexec-probe"
+	source, err := os.ReadFile("/usr/libexec/caisson/text-tools")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(candidate, source, 0o700); err != nil {
+		return "", err
+	}
+	defer os.Remove(candidate)
+	command := exec.Command(candidate, "true")
+	err = command.Run()
+	if err == nil {
+		return "", fmt.Errorf("workspace executable ran")
+	}
+	if !os.IsPermission(err) {
+		return "", fmt.Errorf("workspace exec failed for a reason other than EACCES: %w", err)
+	}
+	return "EACCES", nil
 }
 
 // diagnosticNetworkProbe is test-only. It invokes the real packaged runtime

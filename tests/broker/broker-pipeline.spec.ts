@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type BrokerAdapter,
@@ -350,7 +352,9 @@ class FailingSink implements AuditSink {
 }
 
 function pipeName(): string {
-  return `\\\\.\\pipe\\caisson-pipeline-${randomUUID()}`;
+  return process.platform === "win32"
+    ? `\\\\.\\pipe\\caisson-pipeline-${randomUUID()}`
+    : join(tmpdir(), `caisson-pipeline-${randomUUID()}.sock`);
 }
 
 async function exchange(endpointPath: string, request: unknown): Promise<unknown> {

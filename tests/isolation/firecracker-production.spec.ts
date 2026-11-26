@@ -20,6 +20,7 @@ describe("Firecracker M-1 development probe boundary", () => {
       rootfsPath: "/not-used/m1-dev-probe-rootfs.ext4",
       runtimeDirectory: "/not-used/runtime",
       snapshotDirectory: "/not-used/snapshots",
+      snapshotCreateTimeoutMs: 30_000,
     });
 
     try {
@@ -44,6 +45,7 @@ describe("Firecracker M-1 development probe boundary", () => {
       rootfsPath: "/not-used/caisson-runtime-diagnostic-rootfs.ext4",
       runtimeDirectory: "/not-used/runtime",
       snapshotDirectory: "/not-used/snapshots",
+      snapshotCreateTimeoutMs: 30_000,
     });
     try {
       await expect(
@@ -64,6 +66,7 @@ describe("Firecracker M-1 development probe boundary", () => {
       rootfsPath: "/not-used/caisson-agent-runtime-diagnostic-rootfs.ext4",
       runtimeDirectory: "/not-used/runtime",
       snapshotDirectory: "/not-used/snapshots",
+      snapshotCreateTimeoutMs: 30_000,
     });
     try {
       await expect(

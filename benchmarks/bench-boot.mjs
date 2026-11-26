@@ -169,6 +169,9 @@ async function createFirecrackerDriver(snapshotStore) {
     rootfsPath,
     runtimeDirectory: requiredEnvironment("CAISSON_FIRECRACKER_RUNTIME_DIR"),
     snapshotDirectory: requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+    snapshotCreateTimeoutMs: Number(
+      requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_CREATE_TIMEOUT_MS"),
+    ),
     bootArgs: firecrackerBootArgs,
     oneShotBrokerRequest: runtimeBrokerRequest,
   });

@@ -17,7 +17,11 @@ export async function callFirecrackerApi(
   method: "GET" | "PATCH" | "PUT",
   path: string,
   body?: Readonly<Record<string, unknown>>,
+  timeoutMs?: number,
 ): Promise<ApiResponse> {
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
+    throw new CaissonError("SANDBOX_FAILED", "Firecracker API timeout is invalid");
+  }
   const payload = body === undefined ? "" : JSON.stringify(body);
   const request = [
     `${method} ${path} HTTP/1.1`,
@@ -53,7 +57,7 @@ export async function callFirecrackerApi(
       settle(
         new CaissonError("SANDBOX_FAILED", `Firecracker API request timed out: ${method} ${path}`),
       );
-    }, 5_000);
+    }, timeoutMs ?? 5_000);
 
     socket.once("connect", () => socket.write(request));
     socket.on("data", (chunk: Buffer) => {

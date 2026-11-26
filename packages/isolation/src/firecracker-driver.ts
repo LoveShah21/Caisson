@@ -240,6 +240,7 @@ export interface FirecrackerDriverOptions {
   readonly rootfsPath: string;
   readonly runtimeDirectory: string;
   readonly snapshotDirectory: string;
+  readonly snapshotCreateTimeoutMs: number;
   readonly guestCidStart?: number;
   readonly hostId?: string;
   readonly vcpuCount?: number;
@@ -283,6 +284,12 @@ export class FirecrackerDriver implements IsolationDriver {
   readonly #bootArgs: string;
 
   constructor(options: FirecrackerDriverOptions) {
+    if (
+      !Number.isSafeInteger(options.snapshotCreateTimeoutMs) ||
+      options.snapshotCreateTimeoutMs <= 0
+    ) {
+      throw new CaissonError("SANDBOX_FAILED", "snapshot create timeout configuration is invalid");
+    }
     this.#options = {
       ...options,
       guestCidStart: options.guestCidStart ?? 10_000,
@@ -634,7 +641,13 @@ export class FirecrackerDriver implements IsolationDriver {
     body?: Readonly<Record<string, unknown>>,
   ): Promise<void> {
     this.#diagnostic(`sending Firecracker API request: ${method} ${path}`);
-    await callFirecrackerApi(record.apiSocketPath, method, path, body);
+    await callFirecrackerApi(
+      record.apiSocketPath,
+      method,
+      path,
+      body,
+      path === "/snapshot/create" ? this.#options.snapshotCreateTimeoutMs : undefined,
+    );
   }
 
   async #waitForGuestReady(record: FirecrackerRecord): Promise<void> {

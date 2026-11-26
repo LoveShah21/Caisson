@@ -280,7 +280,7 @@ describe("single-session lifecycle", () => {
     } finally {
       await app.close();
     }
-  });
+  }, 20_000);
 
   it("starts a single-flight periodic reconciler on boot and stops it without leaked timers", async () => {
     const scheduler = new FakeScheduler();

@@ -17,6 +17,7 @@ const required = [
   "CAISSON_FIRECRACKER_ROOTFS",
   "CAISSON_FIRECRACKER_RUNTIME_DIR",
   "CAISSON_FIRECRACKER_SNAPSHOT_DIR",
+  "CAISSON_FIRECRACKER_SNAPSHOT_CREATE_TIMEOUT_MS",
 ];
 for (const name of required) {
   if (process.env[name] === undefined || process.env[name] === "") {
@@ -39,6 +40,7 @@ const driver = new FirecrackerDriver({
   rootfsPath: rootfs,
   runtimeDirectory: process.env.CAISSON_FIRECRACKER_RUNTIME_DIR,
   snapshotDirectory: process.env.CAISSON_FIRECRACKER_SNAPSHOT_DIR,
+  snapshotCreateTimeoutMs: Number(process.env.CAISSON_FIRECRACKER_SNAPSHOT_CREATE_TIMEOUT_MS),
   bootArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init",
   infrastructureProbe: new VsockInfrastructureProbe(),
 });

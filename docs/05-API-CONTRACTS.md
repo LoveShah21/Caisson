@@ -361,6 +361,12 @@ interface Redactor {
 }
 ```
 
+The Firecracker driver requires a positive `snapshotCreateTimeoutMs` in its
+configuration. Operators supply `CAISSON_FIRECRACKER_SNAPSHOT_CREATE_TIMEOUT_MS`
+to the manual harness and benchmark. Snapshot creation does not inherit the
+other Firecracker API calls' five-second timeout. Expiry fails the snapshot
+operation without publishing a restorable snapshot.
+
 Credentials are structured, discriminated by adapter kind, and exist only in
 memory. Secret values use a wrapper whose string, JSON, and inspection forms
 are `[redacted]`. The env backend reads one JSON credential document from an

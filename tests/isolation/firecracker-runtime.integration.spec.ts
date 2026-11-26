@@ -172,6 +172,7 @@ function makeDriver(rootfsPath: string): FirecrackerDriver {
     rootfsPath,
     runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
     snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+    snapshotCreateTimeoutMs: 30_000,
     bootArgs,
     oneShotBrokerRequest: request,
   });

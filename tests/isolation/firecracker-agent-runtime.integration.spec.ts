@@ -187,6 +187,7 @@ describe("Firecracker M-3 agent runtime", () => {
         rootfsPath,
         runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+        snapshotCreateTimeoutMs: 30_000,
         bootArgs,
       });
       const prepared = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);
@@ -204,6 +205,11 @@ describe("Firecracker M-3 agent runtime", () => {
             operation: "agent_socket_stat",
           }),
         ).resolves.toMatchObject({ value: "0600:65532:65532" });
+        await expect(
+          waitForDiagnostic(host.endpointFor(prepared.transport), {
+            operation: "workspace_noexec",
+          }),
+        ).resolves.toMatchObject({ value: "EACCES" });
         const write = await invoke(host, prepared, {
           id: "agent-write",
           op: "fs.write",
@@ -478,6 +484,7 @@ describe("Firecracker M-3 agent runtime", () => {
         rootfsPath,
         runtimeDirectory: required("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: required("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+        snapshotCreateTimeoutMs: 30_000,
         bootArgs,
       });
       const source = await driver.prepare({ id: randomUUID(), image: "agent-runtime" }, host);

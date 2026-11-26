@@ -53,6 +53,7 @@ describe("M-1 driver mechanism", () => {
         rootfsPath,
         runtimeDirectory: requiredEnvironment("CAISSON_FIRECRACKER_RUNTIME_DIR"),
         snapshotDirectory: requiredEnvironment("CAISSON_FIRECRACKER_SNAPSHOT_DIR"),
+        snapshotCreateTimeoutMs: 30_000,
         bootArgs: FIRECRACKER_BOOT_ARGS,
         infrastructureProbe: new VsockInfrastructureProbe(),
       });
